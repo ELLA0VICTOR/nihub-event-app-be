@@ -1,52 +1,115 @@
 const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const morgan = require('morgan');
+const rateLimit = require('express-rate-limit');
 const dotenv = require('dotenv');
 const connectDB = require('./config/database');
+const errorHandler = require('./middleware/errorHandler');
 
 // Load environment variables
 dotenv.config();
 
-// Connect to database
-connectDB();
-
+// Initialize express app
 const app = express();
 
-// Middleware
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+// Connect to MongoDB
+connectDB();
 
-// Routes
-app.use('/api/users', require('./routes/users'));
+// Trust proxy - important for rate limiting behind reverse proxies
+app.set('trust proxy', 1);
 
-// Basic route
-app.get('/', (req, res) => {
-  res.json({
-    message: 'Welcome to Express MongoDB API',
+// Security middleware
+app.use(helmet());
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
+  message: 'Too many requests from this IP, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use('/api/', limiter);
+
+// CORS configuration
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  credentials: true,
+}));
+
+// Body parser middleware
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Logging middleware
+if (process.env.NODE_ENV === 'development') {
+  app.use(morgan('dev'));
+} else {
+  app.use(morgan('combined'));
+}
+
+// Health check route
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Server is running',
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// API info route
+app.get('/api', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Attendance Management System API',
     version: '1.0.0',
     endpoints: {
-      users: '/api/users'
-    }
+      auth: '/api/auth',
+      events: '/api/events',
+      participants: '/api/participants',
+      attendance: '/api/attendance',
+      adminRequests: '/api/admin-requests',
+    },
   });
 });
+
+// Mount routes
+app.use('/api/auth', require('./routes/auth'));
+app.use('/api/events', require('./routes/events'));
+app.use('/api/participants', require('./routes/participants'));
+app.use('/api/attendance', require('./routes/attendance'));
+app.use('/api/admin-requests', require('./routes/adminRequests'));
 
 // 404 handler
-app.use('*', (req, res) => {
+app.use((req, res) => {
   res.status(404).json({
     success: false,
-    error: 'Route not found'
+    message: 'Route not found',
   });
 });
 
-// Error handler
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({
-    success: false,
-    error: 'Server Error'
-  });
-});
+// Error handler middleware (must be last)
+app.use(errorHandler);
 
-const PORT = process.env.PORT || 3000;
+// Start server
+const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
 });
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (err) => {
+  console.error(`Unhandled Rejection: ${err.message}`);
+  server.close(() => process.exit(1));
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (err) => {
+  console.error(`Uncaught Exception: ${err.message}`);
+  process.exit(1);
+});
+
+module.exports = app;
