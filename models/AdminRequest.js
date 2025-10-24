@@ -5,7 +5,7 @@ const adminRequestSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: [true, 'User ID is required'],
-    unique: true,
+    unique: true, // this already creates an index
   },
   requestedRole: {
     type: String,
@@ -38,8 +38,7 @@ const adminRequestSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-// Index for faster queries
+// Keep this one — it’s useful
 adminRequestSchema.index({ status: 1, createdAt: -1 });
-adminRequestSchema.index({ userId: 1 });
 
 module.exports = mongoose.model('AdminRequest', adminRequestSchema);
