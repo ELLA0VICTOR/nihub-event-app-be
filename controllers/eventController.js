@@ -9,7 +9,7 @@ const Attendance = require('../models/Attendance');
  */
 exports.createEvent = async (req, res, next) => {
   try {
-    const { name, description, date, location, maxParticipants, status } = req.body;
+    const { name, description, date, location, maxParticipants, status, imageUrl, tracks } = req.body;
 
     const event = await Event.create({
       name,
@@ -18,6 +18,8 @@ exports.createEvent = async (req, res, next) => {
       location,
       maxParticipants,
       status,
+      imageUrl,
+      tracks,
       createdBy: req.user.id,
     });
 
@@ -32,6 +34,7 @@ exports.createEvent = async (req, res, next) => {
     next(error);
   }
 };
+
 
 /**
  * @desc    Get all events
@@ -117,7 +120,7 @@ exports.getEvent = async (req, res, next) => {
  */
 exports.updateEvent = async (req, res, next) => {
   try {
-    const { name, description, date, location, maxParticipants, status, isActive } = req.body;
+    const { name, description, date, location, maxParticipants, status, isActive, imageUrl, tracks } = req.body;
 
     let event = await Event.findById(req.params.id);
 
@@ -128,7 +131,6 @@ exports.updateEvent = async (req, res, next) => {
       });
     }
 
-    // Update fields
     event = await Event.findByIdAndUpdate(
       req.params.id,
       {
@@ -139,6 +141,8 @@ exports.updateEvent = async (req, res, next) => {
         maxParticipants,
         status,
         isActive,
+        imageUrl,
+        tracks,
       },
       {
         new: true,
