@@ -33,3 +33,5 @@ coverage/
 # Temporary folders
 tmp/
 temp/
+
+uploads/

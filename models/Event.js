@@ -41,6 +41,25 @@ const eventSchema = new mongoose.Schema({
     type: Boolean,
     default: true,
   },
+  // NEW FIELDS FOR FRONTEND COMPATIBILITY
+  imageUrl: {
+    type: String,
+    trim: true,
+  },
+  tracks: [{
+    trackId: {
+      type: String,
+      required: true,
+    },
+    trackName: {
+      type: String,
+      required: true,
+    },
+    trackAbbreviation: {
+      type: String,
+      required: true,
+    }
+  }],
 }, {
   timestamps: true,
 });

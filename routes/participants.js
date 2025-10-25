@@ -10,15 +10,17 @@ const {
 } = require('../controllers/participantController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { validate, validateObjectId } = require('../middleware/validateRequest');
+const { mapParticipantFields } = require('../middleware/fieldMapper');
+const upload = require('../utils/fileUpload');
 
 const router = express.Router();
 
 // Validation rules
 const participantRegistrationValidation = [
-  body('name')
+  body('name').optional(),  
+  body('fullname')
+    .optional()
     .trim()
-    .notEmpty()
-    .withMessage('Name is required')
     .isLength({ min: 2, max: 100 })
     .withMessage('Name must be between 2 and 100 characters'),
   body('email')
@@ -42,7 +44,8 @@ const participantRegistrationValidation = [
     .trim()
     .isLength({ max: 100 })
     .withMessage('Department cannot exceed 100 characters'),
-  body('matricNo')
+  body('matricNo').optional(),
+  body('matricnumber')
     .optional()
     .trim()
     .isLength({ max: 50 })
@@ -57,6 +60,8 @@ const participantRegistrationValidation = [
 // Routes
 router.post(
   '/register',
+  upload.single('photo'),  // Handle file upload
+  mapParticipantFields,    // Map field names
   participantRegistrationValidation,
   validate,
   registerParticipant

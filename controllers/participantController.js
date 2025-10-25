@@ -11,16 +11,21 @@ const { sendQRCodeEmail } = require('../utils/mailSender');
 exports.registerParticipant = async (req, res, next) => {
   try {
     const {
-      name,
+      name,        
       email,
-      photo,
       department,
-      matricNo,
+      matricNo,   
       gender,
       track,
       eventId,
       phoneNumber,
     } = req.body;
+
+    // Handle photo if uploaded
+    let photo = null;
+    if (req.file) {
+      photo = req.file.path; // Save file path
+    }
 
     // Check if event exists
     const event = await Event.findById(eventId);
@@ -55,6 +60,19 @@ exports.registerParticipant = async (req, res, next) => {
         return res.status(400).json({
           success: false,
           message: 'Event has reached maximum participant capacity',
+        });
+      }
+    }
+
+    // Validate track exists in event
+    if (track && event.tracks && event.tracks.length > 0) {
+      const trackExists = event.tracks.some(t => 
+        t.trackAbbreviation === track || t.trackName === track
+      );
+      if (!trackExists) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid track selected for this event',
         });
       }
     }

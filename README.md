@@ -1,136 +1,236 @@
-# Nihub backend with Express MongoDB Boilerplate
+Attendance Management System - Backend API
+A comprehensive backend for managing event attendance with QR code scanning, built with Node.js, Express, and MongoDB.
 
-A simple Node.js Express API with MongoDB integration and nodemon for development.
+🚀 Quick Start
+Prerequisites
 
-## Features
+Node.js v14+
+MongoDB Atlas account
+Gmail account (for testing emails)
 
-- Express.js web framework
-- MongoDB database with Mongoose ODM
-- Environment configuration with dotenv
-- Nodemon for development auto-restart
-- RESTful API routes for User resource
-- Error handling middleware
-- Input validation
+Installation
+bash# 1. Clone and install
+git clone <repository-url>
+cd attendance-management-backend
+npm install
 
-## Project Structure
+# 2. Create uploads folder
+mkdir uploads
 
-```
-node-express-mongo-app/
-├── config/
-│   └── database.js          # MongoDB connection configuration
-├── models/
-│   └── User.js             # User model schema
-├── routes/
-│   └── users.js            # User API routes
-├── middleware/             # Custom middleware (empty for now)
-├── server.js               # Main application file
-├── .env                    # Environment variables
-├── .gitignore             # Git ignore rules
-├── package.json           # Project dependencies and scripts
-└── README.md              # This file
-```
+# 3. Setup environment
+cp .env.example .env
+Environment Setup
+Edit .env:
+env# Server
+NODE_ENV=development
+PORT=5000
 
-## Prerequisites
+# MongoDB Atlas - Get from https://cloud.mongodb.com
+MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/attendance-management
 
-- Node.js (v14 or higher)
-- MongoDB installed and running locally, or a MongoDB connection string
+# JWT Secret - Generate with: node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
+JWT_SECRET=your_generated_secret_here
+JWT_EXPIRE=7d
 
-## Installation
+# Gmail (for testing)
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_USER=your-email@gmail.com
+EMAIL_PASSWORD=your_app_password  # Get from Google Account > Security > App Passwords
+EMAIL_FROM=NIHUB Team <your-email@gmail.com>
 
-1. Clone or navigate to the project directory:
+# Frontend
+FRONTEND_URL=http://localhost:3000
+Run
+bashnpm run dev
+Visit: http://localhost:5000/health
 
-   ```bash
-   cd node-express-mongo-app
-   ```
+📚 API Endpoints
+Base URL: http://localhost:5000/api
+Authentication (No Token Required)
+bash# Register Superadmin
+POST /api/auth/register
+{
+  "name": "Admin Name",
+  "email": "admin@example.com",
+  "password": "password123",
+  "role": "superadmin"
+}
 
-2. Install dependencies:
+# Login
+POST /api/auth/login
+{
+  "email": "admin@example.com",
+  "password": "password123"
+}
+# Returns: { token: "...", user: {...} }
+# Save this token!
+Events (Public)
+bash# Get all events (no auth)
+GET /api/events
 
-   ```bash
-   npm install
-   ```
+# Get single event (no auth)
+GET /api/events/:id
+Events (Superadmin Only)
+bash# Create event
+POST /api/events
+Headers: Authorization: Bearer <token>
+{
+  "name": "Event Name",
+  "date": "2025-11-15T09:00:00Z",
+  "location": "Venue",
+  "description": "Description",
+  "maxParticipants": 200,
+  "imageUrl": "https://...",
+  "tracks": [
+    {
+      "trackId": "1",
+      "trackName": "Web Development",
+      "trackAbbreviation": "WEB"
+    }
+  ]
+}
 
-3. Create/update the `.env` file with your configuration:
-
-   ```
-   PORT=3000
-   MONGODB_URI=mongodb://localhost:27017/express-mongo-app
-   NODE_ENV=development
-   ```
-
-4. Make sure MongoDB is running on your system
-
-## Usage
-
-### Development Mode (with nodemon)
-
-```bash
-npm run dev
-```
-
-### Production Mode
-
-```bash
-npm start
-```
-
-The server will start on `http://localhost:3000` (or the port specified in your .env file).
-
-## API Endpoints
-
-### Base URL
-
-- `GET /` - Welcome message with API information
-
-### Users API
-
-- `GET /api/users` - Get all users
-- `GET /api/users/:id` - Get single user by ID
-- `POST /api/users` - Create new user
-- `PUT /api/users/:id` - Update user by ID
-- `DELETE /api/users/:id` - Delete user by ID
-
-### Example User Object
-
-```json
+# Update/Delete event
+PUT /api/events/:id
+DELETE /api/events/:id
+Participants (Public Registration)
+bash# Register participant (no auth, sends QR via email)
+POST /api/participants/register
 {
   "name": "John Doe",
   "email": "john@example.com",
-  "age": 30
+  "eventId": "event_id_here",
+  "gender": "male",
+  "department": "Computer Science",
+  "matricNo": "CS/2020/001",
+  "track": "WEB"
 }
+
+# With photo (multipart/form-data)
+POST /api/participants/register
+FormData: name, email, eventId, photo, etc.
+Attendance (Admin/Superadmin)
+bash# Scan QR code
+POST /api/attendance/scan
+Headers: Authorization: Bearer <token>
+{
+  "participantId": "id_from_qr_code"
+}
+
+# Get attendance report
+GET /api/attendance/event/:eventId/report
+
+🎯 Frontend Integration
+Field Name Compatibility
+Backend accepts both formats (no changes needed):
+javascript// Your current format works!
+{
+  eventname: "...",        // OR name: "..."
+  fullname: "...",         // OR name: "..."
+  matricnumber: "...",     // OR matricNo: "..."
+  eventcapacity: 100       // OR maxParticipants: 100
+}
+Update Your Frontend URLs
+javascript// Change from:
+axios.post("BACKENDURL", data)
+
+// To:
+axios.post("http://localhost:5000/api/events", data, {
+  headers: { Authorization: `Bearer ${token}` }
+})
+Store Token After Login
+javascriptconst response = await axios.post('http://localhost:5000/api/auth/login', {
+  email, password
+});
+
+// Save token
+localStorage.setItem('token', response.data.data.token);
+
+// Use in requests
+axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+
+🧪 Testing
+bash# Run all tests
+npm test
+
+# Test with Postman
+1. Register superadmin
+2. Login and copy token
+3. Create event
+4. Register participant (check email for QR)
+5. Scan QR code
 ```
 
-## Testing the API
+---
 
-You can test the API using tools like Postman, curl, or any HTTP client.
-
-### Create a new user:
-
-```bash
-curl -X POST http://localhost:3000/api/users \
-  -H "Content-Type: application/json" \
-  -d '{"name": "John Doe", "email": "john@example.com", "age": 30}'
+## 📁 Project Structure
 ```
+attendance-management-backend/
+├── config/          # Database connection
+├── controllers/     # Business logic
+├── models/          # Database schemas
+├── routes/          # API endpoints
+├── middleware/      # Auth, validation, error handling
+├── utils/           # QR generation, email sending
+├── tests/           # Test files
+├── uploads/         # Uploaded photos
+├── .env             # Environment variables
+├── server.js        # Main entry point
+└── package.json     # Dependencies
 
-### Get all users:
+🐛 Common Issues
+MongoDB Connection Failed
 
-```bash
-curl http://localhost:3000/api/users
-```
+Check MONGODB_URI in .env
+Whitelist IP (0.0.0.0/0) in MongoDB Atlas
 
-## Environment Variables
+Email Not Sending
 
-- `PORT` - Server port (default: 3000)
-- `MONGODB_URI` - MongoDB connection string
-- `NODE_ENV` - Environment mode (development/production)
+Use Gmail App Password (not regular password)
+Enable 2-Step Verification first
 
-## Contributing
+JWT Token Invalid
 
-1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+Format: Authorization: Bearer <token>
+Token expires after 7 days - login again
 
-## License
+Port Already in Use
+bash# Kill process
+lsof -ti:5000 | xargs kill -9  # Mac/Linux
+netstat -ano | findstr :5000   # Windows
 
-ISC
+🚀 Deployment (Quick)
+Heroku
+bashheroku create app-name
+heroku config:set NODE_ENV=production
+heroku config:set MONGODB_URI="..."
+heroku config:set JWT_SECRET="..."
+heroku config:set EMAIL_HOST=smtp.gmail.com
+heroku config:set EMAIL_USER="..."
+heroku config:set EMAIL_PASSWORD="..."
+git push heroku main
+Render
+
+Connect GitHub repo
+Add environment variables
+Deploy
+
+
+ User Roles
+ActionPublicAdminSuperadminView Events✅✅✅Register for Event✅✅✅Create/Edit Event❌❌✅Scan QR❌✅✅Approve Admins❌❌✅
+
+
+✅ Complete Setup Checklist
+
+ Node.js installed
+ MongoDB Atlas setup
+ .env configured
+ npm install completed
+ npm run dev running
+ Health check passed
+ Superadmin created
+ Test event created
+ Test registration done
+ QR email received
+ Frontend URLs updated

@@ -50,6 +50,8 @@ if (process.env.NODE_ENV === 'development') {
   app.use(morgan('combined'));
 }
 
+app.use('/uploads', express.static('uploads'));
+
 // Health check route
 app.get('/health', (req, res) => {
   res.status(200).json({
