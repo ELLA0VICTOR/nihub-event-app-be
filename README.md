@@ -1,7 +1,7 @@
 Attendance Management System - Backend API
 A comprehensive backend for managing event attendance with QR code scanning, built with Node.js, Express, and MongoDB.
 
-🚀 Quick Start
+ Quick Start
 Prerequisites
 
 Node.js v14+
@@ -45,7 +45,7 @@ Run
 bashnpm run dev
 Visit: http://localhost:5000/health
 
-📚 API Endpoints
+ API Endpoints
 Base URL: http://localhost:5000/api
 Authentication (No Token Required)
 bash# Register Superadmin
@@ -121,7 +121,7 @@ Headers: Authorization: Bearer <token>
 # Get attendance report
 GET /api/attendance/event/:eventId/report
 
-🎯 Frontend Integration
+ Frontend Integration
 Field Name Compatibility
 Backend accepts both formats (no changes needed):
 javascript// Your current format works!
@@ -150,7 +150,7 @@ localStorage.setItem('token', response.data.data.token);
 // Use in requests
 axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
 
-🧪 Testing
+ Testing
 bash# Run all tests
 npm test
 
@@ -179,7 +179,7 @@ attendance-management-backend/
 ├── server.js        # Main entry point
 └── package.json     # Dependencies
 
-🐛 Common Issues
+ Common Issues
 MongoDB Connection Failed
 
 Check MONGODB_URI in .env
@@ -200,7 +200,7 @@ bash# Kill process
 lsof -ti:5000 | xargs kill -9  # Mac/Linux
 netstat -ano | findstr :5000   # Windows
 
-🚀 Deployment (Quick)
+ Deployment (Quick)
 Heroku
 bashheroku create app-name
 heroku config:set NODE_ENV=production
@@ -216,12 +216,7 @@ Connect GitHub repo
 Add environment variables
 Deploy
 
-
- User Roles
-ActionPublicAdminSuperadminView Events✅✅✅Register for Event✅✅✅Create/Edit Event❌❌✅Scan QR❌✅✅Approve Admins❌❌✅
-
-
-✅ Complete Setup Checklist
+ Complete Setup Checklist
 
  Node.js installed
  MongoDB Atlas setup
