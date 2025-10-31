@@ -69,20 +69,21 @@ app.get('/api', (req, res) => {
     version: '1.0.0',
     endpoints: {
       auth: '/api/auth',
+      users: '/api/users',  
       events: '/api/events',
       participants: '/api/participants',
       attendance: '/api/attendance',
-      adminRequests: '/api/admin-requests',
     },
   });
 });
 
 // Mount routes
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/users', require('./routes/users'));  
 app.use('/api/events', require('./routes/events'));
 app.use('/api/participants', require('./routes/participants'));
 app.use('/api/attendance', require('./routes/attendance'));
-app.use('/api/admin-requests', require('./routes/adminRequests'));
+
 
 // 404 handler
 app.use((req, res) => {

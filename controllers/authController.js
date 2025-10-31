@@ -1,6 +1,5 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const AdminRequest = require('../models/AdminRequest');
 
 /**
  * Generate JWT token
@@ -12,13 +11,22 @@ const generateToken = (id) => {
 };
 
 /**
- * @desc    Register new user (admin)
- * @route   POST /api/auth/register
- * @access  Public
+ * @desc    Register first superadmin (one-time setup)
+ * @route   POST /api/auth/register-superadmin
+ * @access  Public (but should be protected in production)
  */
-exports.register = async (req, res, next) => {
+exports.registerSuperadmin = async (req, res, next) => {
   try {
-    const { name, email, password, role } = req.body;
+    const { name, email, password } = req.body;
+
+    // Check if any superadmin exists
+    const existingSuperadmin = await User.findOne({ role: 'superadmin' });
+    if (existingSuperadmin) {
+      return res.status(400).json({
+        success: false,
+        message: 'Superadmin already exists. Use admin panel to create more users.',
+      });
+    }
 
     // Check if user already exists
     const existingUser = await User.findOne({ email });
@@ -29,30 +37,23 @@ exports.register = async (req, res, next) => {
       });
     }
 
-    // Create user
+    // Create first superadmin
     const user = await User.create({
       name,
       email,
       password,
-      role: role === 'superadmin' ? 'superadmin' : 'admin',
-      isApproved: role === 'superadmin' ? true : false, // Superadmin auto-approved
+      role: 'superadmin',
+      isApproved: true,
     });
 
-    // Create admin request if role is admin
-    if (role !== 'superadmin') {
-      await AdminRequest.create({
-        userId: user._id,
-        requestedRole: 'admin',
-        status: 'pending',
-      });
-    }
+    // Generate token
+    const token = generateToken(user._id);
 
     res.status(201).json({
       success: true,
-      message: role === 'superadmin' 
-        ? 'Superadmin registered successfully' 
-        : 'Registration successful. Awaiting superadmin approval.',
+      message: 'Superadmin registered successfully',
       data: {
+        token,
         user: {
           id: user._id,
           name: user.name,
@@ -74,7 +75,9 @@ exports.register = async (req, res, next) => {
  */
 exports.login = async (req, res, next) => {
   try {
-    const { email, password } = req.body;
+    // Support both lowercase and capitalized field names
+    const email = req.body.email || req.body.Email;
+    const password = req.body.password || req.body.Password;
 
     // Validate input
     if (!email || !password) {
@@ -85,7 +88,7 @@ exports.login = async (req, res, next) => {
     }
 
     // Check if user exists (include password for comparison)
-    const user = await User.findOne({ email }).select('+password');
+    const user = await User.findOne({ email: email.toLowerCase() }).select('+password');
 
     if (!user) {
       return res.status(401).json({
@@ -104,11 +107,11 @@ exports.login = async (req, res, next) => {
       });
     }
 
-    // Check if admin is approved
-    if (user.role === 'admin' && !user.isApproved) {
+    // Check if user is approved
+    if (!user.isApproved) {
       return res.status(403).json({
         success: false,
-        message: 'Your account is pending approval by a superadmin',
+        message: 'Your account is not active',
       });
     }
 
