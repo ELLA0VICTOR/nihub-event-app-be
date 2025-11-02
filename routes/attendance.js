@@ -8,6 +8,8 @@ const {
   deleteAttendance,
   getAttendanceReport,
   getParticipantAttendance,
+  markAllPresent,
+  downloadEventData
 } = require('../controllers/attendanceController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { validate, validateObjectId } = require('../middleware/validateRequest');
@@ -89,5 +91,25 @@ router.route('/:id')
     updateAttendance
   )
   .delete(protect, authorize('superadmin'), validateObjectId(), deleteAttendance);
+
+ 
+
+// Mark all participants as present (Superadmin only)
+router.post(
+  '/mark-all-present/:eventId',
+  protect,
+  authorize('superadmin'),
+  validateObjectId('eventId'),
+  markAllPresent
+);
+
+// Download event data
+router.get(
+  '/download/:eventId',
+  protect,
+  authorize('admin', 'superadmin'),
+  validateObjectId('eventId'),
+  downloadEventData
+);
 
 module.exports = router;

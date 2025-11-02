@@ -483,3 +483,154 @@ exports.getParticipantAttendance = async (req, res, next) => {
   }
 };
 
+/**
+ * @desc    Mark all participants as present for an event
+ * @route   POST /api/attendance/mark-all-present/:eventId
+ * @access  Private (Superadmin only)
+ */
+exports.markAllPresent = async (req, res, next) => {
+  try {
+    const { eventId } = req.params;
+
+    // Verify event exists
+    const event = await Event.findById(eventId);
+    if (!event) {
+      return res.status(404).json({
+        success: false,
+        message: 'Event not found',
+      });
+    }
+
+    // Get all participants for this event
+    const participants = await Participant.find({ eventId, isActive: true });
+
+    if (participants.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No participants found for this event',
+      });
+    }
+
+    // Check which participants already have attendance
+    const existingAttendanceIds = await Attendance.find({ eventId })
+      .distinct('participantId');
+
+    // Filter out participants who already have attendance
+    const participantsToMark = participants.filter(
+      p => !existingAttendanceIds.some(id => id.toString() === p._id.toString())
+    );
+
+    if (participantsToMark.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'All participants already marked present',
+      });
+    }
+
+    // Create attendance records for all participants without attendance
+    const attendanceRecords = participantsToMark.map(participant => ({
+      participantId: participant._id,
+      eventId,
+      scannedBy: req.user.id,
+      status: 'present',
+      notes: 'Marked present by admin (bulk)',
+      scannedAt: new Date(),
+    }));
+
+    await Attendance.insertMany(attendanceRecords);
+
+    res.status(201).json({
+      success: true,
+      message: `Successfully marked ${participantsToMark.length} participants as present`,
+      data: {
+        totalMarked: participantsToMark.length,
+        totalParticipants: participants.length,
+        alreadyMarked: existingAttendanceIds.length,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Download event participants as JSON (can be converted to CSV on frontend)
+ * @route   GET /api/attendance/download/:eventId
+ * @access  Private (Admin/Superadmin)
+ */
+exports.downloadEventData = async (req, res, next) => {
+  try {
+    const { eventId } = req.params;
+
+    // Get event details
+    const event = await Event.findById(eventId).populate('createdBy', 'name email');
+    if (!event) {
+      return res.status(404).json({
+        success: false,
+        message: 'Event not found',
+      });
+    }
+
+    // Get all participants with attendance status
+    const participants = await Participant.find({ eventId })
+      .populate('eventId', 'name date location')
+      .lean();
+
+    // Get all attendance records
+    const attendanceRecords = await Attendance.find({ eventId }).lean();
+
+    // Create attendance map for quick lookup
+    const attendanceMap = {};
+    attendanceRecords.forEach(record => {
+      attendanceMap[record.participantId.toString()] = {
+        status: record.status,
+        scannedAt: record.scannedAt,
+        notes: record.notes,
+      };
+    });
+
+    // Combine participant and attendance data
+    const downloadData = participants.map(participant => {
+      const attendance = attendanceMap[participant._id.toString()];
+      return {
+        participantId: participant._id,
+        name: participant.name,
+        email: participant.email,
+        department: participant.department || 'N/A',
+        matricNo: participant.matricNo || 'N/A',
+        gender: participant.gender || 'N/A',
+        track: participant.track || 'N/A',
+        phoneNumber: participant.phoneNumber || 'N/A',
+        registeredAt: participant.registeredAt,
+        attendanceStatus: attendance ? attendance.status : 'absent',
+        scannedAt: attendance ? attendance.scannedAt : null,
+        attendanceNotes: attendance ? attendance.notes : '',
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        event: {
+          id: event._id,
+          name: event.name,
+          date: event.date,
+          location: event.location,
+          createdBy: event.createdBy.name,
+        },
+        participants: downloadData,
+        summary: {
+          total: participants.length,
+          present: attendanceRecords.filter(a => a.status === 'present').length,
+          late: attendanceRecords.filter(a => a.status === 'late').length,
+          excused: attendanceRecords.filter(a => a.status === 'excused').length,
+          absent: participants.length - attendanceRecords.length,
+        },
+        generatedAt: new Date(),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
