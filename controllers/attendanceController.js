@@ -2,15 +2,18 @@ const Attendance = require('../models/Attendance');
 const Participant = require('../models/Participant');
 const Event = require('../models/Event');
 const { validateQRData } = require('../utils/qrGenerator');
+const EventPermission = require('../models/EventPermission');
 
 /**
- * @desc    Scan QR code and mark attendance
+ * @desc    Scan QR code and mark attendance (WITH CREATOR PERMISSION CHECK)
  * @route   POST /api/attendance/scan
- * @access  Private (Admin/Superadmin)
+ * @access  Private (Event Creator, Granted Admins, or Superadmin)
  */
 exports.scanQRCode = async (req, res, next) => {
   try {
     const { participantId, eventId, notes } = req.body;
+    const scannerId = req.user.id;
+    const scannerRole = req.user.role;
 
     // Validate QR data
     if (!validateQRData(participantId)) {
@@ -21,7 +24,7 @@ exports.scanQRCode = async (req, res, next) => {
     }
 
     // Find participant
-    const participant = await Participant.findById(participantId).populate('eventId', 'name date location');
+    const participant = await Participant.findById(participantId).populate('eventId', 'name date location startDate endDate status isActive isDeleted createdBy');
 
     if (!participant) {
       return res.status(404).json({
@@ -38,24 +41,78 @@ exports.scanQRCode = async (req, res, next) => {
       });
     }
 
+    const event = participant.eventId;
+
+    // Check if event is active
+    if (!event.isActive || event.isDeleted) {
+      return res.status(400).json({
+        success: false,
+        message: 'This event is no longer active',
+      });
+    }
+
+    // Check if event is terminated
+    if (event.status === 'terminated' || event.status === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        message: `This event has been ${event.status}`,
+      });
+    }
+
+    // Check if QR code is still valid (within event dates)
+    const now = new Date();
+    if (event.endDate && now > event.endDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'This event has ended. QR code is no longer valid.',
+      });
+    }
+
     // Verify event match if provided
-    if (eventId && participant.eventId._id.toString() !== eventId) {
+    if (eventId && event._id.toString() !== eventId) {
       return res.status(400).json({
         success: false,
         message: 'Participant is not registered for this event',
       });
     }
 
-    // Check if already marked attendance
+    // CHECK SCANNER PERMISSIONS
+    let hasPermission = false;
+
+    // Superadmin can scan any event
+    if (scannerRole === 'superadmin') {
+      hasPermission = true;
+    }
+    // Event creator can scan their own event
+    else if (event.createdBy.toString() === scannerId) {
+      hasPermission = true;
+    }
+    // Check if scanner has been granted permission
+    else {
+      hasPermission = await EventPermission.hasPermission(scannerId, event._id, 'canScan');
+    }
+
+    if (!hasPermission) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to scan attendance for this event',
+      });
+    }
+
+    // Check if already marked attendance TODAY
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
     const existingAttendance = await Attendance.findOne({
       participantId,
-      eventId: participant.eventId._id,
+      eventId: event._id,
+      attendanceDate: today,
     });
 
     if (existingAttendance) {
       return res.status(400).json({
         success: false,
-        message: 'Attendance already recorded for this participant',
+        message: 'Attendance already recorded for this participant today',
         data: {
           attendance: existingAttendance,
           participant: {
@@ -70,10 +127,11 @@ exports.scanQRCode = async (req, res, next) => {
     // Create attendance record
     const attendance = await Attendance.create({
       participantId,
-      eventId: participant.eventId._id,
-      scannedBy: req.user.id,
+      eventId: event._id,
+      scannedBy: scannerId,
       notes,
       status: 'present',
+      attendanceDate: today,
     });
 
     res.status(201).json({
@@ -92,10 +150,10 @@ exports.scanQRCode = async (req, res, next) => {
           track: participant.track,
         },
         event: {
-          id: participant.eventId._id,
-          name: participant.eventId.name,
-          date: participant.eventId.date,
-          location: participant.eventId.location,
+          id: event._id,
+          name: event.name,
+          date: event.date,
+          location: event.location,
         },
       },
     });
@@ -103,7 +161,6 @@ exports.scanQRCode = async (req, res, next) => {
     next(error);
   }
 };
-
 /**
  * @desc    Get all attendance records for an event
  * @route   GET /api/attendance/event/:eventId
@@ -423,6 +480,300 @@ exports.getAttendanceReport = async (req, res, next) => {
         absentees,
         byDate,
         topParticipants,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+
+/**
+ * @desc    Get comprehensive attendance report with first-day logic
+ * @route   GET /api/attendance/event/:eventId/comprehensive-report
+ * @access  Private (Admin/Superadmin)
+ */
+exports.getComprehensiveReport = async (req, res, next) => {
+  try {
+    const { eventId } = req.params;
+
+    const event = await Event.findById(eventId);
+    if (!event) {
+      return res.status(404).json({
+        success: false,
+        message: 'Event not found',
+      });
+    }
+
+    // Get all participants
+    const allParticipants = await Participant.find({ eventId, isActive: true })
+      .select('name email track department matricNo registeredAt')
+      .lean();
+
+    if (allParticipants.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: 'No participants registered for this event yet',
+        data: {
+          event: {
+            id: event._id,
+            name: event.name,
+            track: event.selectedTrack,
+          },
+          participants: [],
+          dailyReports: [],
+        },
+      });
+    }
+
+    // Find the FIRST registration date (this is when event effectively started)
+    const firstRegistrationDate = new Date(
+      Math.min(...allParticipants.map(p => new Date(p.registeredAt)))
+    );
+    firstRegistrationDate.setHours(0, 0, 0, 0);
+
+    // Get all attendance records
+    const allAttendance = await Attendance.find({ eventId })
+      .select('participantId attendanceDate status scannedAt')
+      .lean();
+
+    // Get unique attendance dates
+    const attendanceDates = [...new Set(
+      allAttendance.map(a => {
+        const d = new Date(a.attendanceDate);
+        d.setHours(0, 0, 0, 0);
+        return d.getTime();
+      })
+    )].sort((a, b) => a - b);
+
+    // If no one has attended yet, show all as absent
+    if (attendanceDates.length === 0) {
+      const report = allParticipants.map(p => ({
+        participantId: p._id,
+        name: p.name,
+        email: p.email,
+        track: p.track || 'N/A',
+        department: p.department || 'N/A',
+        matricNo: p.matricNo || 'N/A',
+        registeredAt: p.registeredAt,
+        attendanceStatus: 'No attendance records yet',
+        totalDaysPresent: 0,
+        totalDaysAbsent: 0,
+      }));
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          event: {
+            id: event._id,
+            name: event.name,
+            track: event.selectedTrack,
+          },
+          eventStartDate: firstRegistrationDate,
+          totalParticipants: allParticipants.length,
+          participants: report,
+          dailyReports: [],
+        },
+      });
+    }
+
+    // Generate daily reports
+    const dailyReports = [];
+
+    for (const dateTimestamp of attendanceDates) {
+      const date = new Date(dateTimestamp);
+      const dateString = date.toISOString().split('T')[0];
+
+      // Get participants who were registered by this date
+      const registeredByThisDate = allParticipants.filter(p => {
+        const regDate = new Date(p.registeredAt);
+        regDate.setHours(0, 0, 0, 0);
+        return regDate <= date;
+      });
+
+      // Get attendance for this date
+      const dateAttendance = allAttendance.filter(a => {
+        const attDate = new Date(a.attendanceDate);
+        attDate.setHours(0, 0, 0, 0);
+        return attDate.getTime() === dateTimestamp;
+      });
+
+      const attendedIds = dateAttendance.map(a => a.participantId.toString());
+
+      // Calculate present and absent
+      const present = registeredByThisDate.filter(p => 
+        attendedIds.includes(p._id.toString())
+      );
+
+      const absent = registeredByThisDate.filter(p => 
+        !attendedIds.includes(p._id.toString())
+      );
+
+      dailyReports.push({
+        date: dateString,
+        dayNumber: dailyReports.length + 1,
+        totalRegistered: registeredByThisDate.length,
+        presentCount: present.length,
+        absentCount: absent.length,
+        attendanceRate: ((present.length / registeredByThisDate.length) * 100).toFixed(2) + '%',
+        present: present.map(p => ({
+          name: p.name,
+          email: p.email,
+          track: p.track || 'N/A',
+          matricNo: p.matricNo || 'N/A',
+        })),
+        absent: absent.map(p => ({
+          name: p.name,
+          email: p.email,
+          track: p.track || 'N/A',
+          matricNo: p.matricNo || 'N/A',
+          reason: new Date(p.registeredAt) > date 
+            ? 'Registered after this date' 
+            : 'Did not attend',
+        })),
+      });
+    }
+
+    // Generate participant summary
+    const participantSummary = allParticipants.map(p => {
+      const participantAttendance = allAttendance.filter(a => 
+        a.participantId.toString() === p._id.toString()
+      );
+
+      // Count days participant should have attended
+      const regDate = new Date(p.registeredAt);
+      regDate.setHours(0, 0, 0, 0);
+      
+      const applicableDates = attendanceDates.filter(d => d >= regDate.getTime());
+      const totalDaysApplicable = applicableDates.length;
+      const totalDaysPresent = participantAttendance.length;
+      const totalDaysAbsent = totalDaysApplicable - totalDaysPresent;
+
+      return {
+        participantId: p._id,
+        name: p.name,
+        email: p.email,
+        track: p.track || 'N/A',
+        department: p.department || 'N/A',
+        matricNo: p.matricNo || 'N/A',
+        registeredAt: p.registeredAt,
+        totalDaysApplicable,
+        totalDaysPresent,
+        totalDaysAbsent,
+        attendanceRate: totalDaysApplicable > 0 
+          ? ((totalDaysPresent / totalDaysApplicable) * 100).toFixed(2) + '%'
+          : 'N/A',
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        event: {
+          id: event._id,
+          name: event.name,
+          track: event.selectedTrack || 'No track',
+          startDate: event.startDate,
+          endDate: event.endDate,
+        },
+        eventStartDate: firstRegistrationDate,
+        totalParticipants: allParticipants.length,
+        totalAttendanceDays: attendanceDates.length,
+        participants: participantSummary,
+        dailyReports,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+
+
+/**
+ * @desc    Get daily attendance breakdown for multi-day events
+ * @route   GET /api/attendance/event/:eventId/daily
+ * @access  Private (Admin/Superadmin)
+ */
+exports.getDailyAttendance = async (req, res, next) => {
+  try {
+    const { eventId } = req.params;
+
+    const event = await Event.findById(eventId);
+    if (!event) {
+      return res.status(404).json({
+        success: false,
+        message: 'Event not found',
+      });
+    }
+
+    // Get all participants
+    const allParticipants = await Participant.find({ eventId, isActive: true });
+
+    // Get attendance grouped by date
+    const dailyAttendance = await Attendance.aggregate([
+      { $match: { eventId: event._id } },
+      {
+        $group: {
+          _id: {
+            date: { $dateToString: { format: '%Y-%m-%d', date: '$attendanceDate' } },
+            participantId: '$participantId',
+          },
+          status: { $first: '$status' },
+          scannedAt: { $first: '$scannedAt' },
+        },
+      },
+      {
+        $group: {
+          _id: '$_id.date',
+          participants: {
+            $push: {
+              participantId: '$_id.participantId',
+              status: '$status',
+              scannedAt: '$scannedAt',
+            },
+          },
+          presentCount: {
+            $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] },
+          },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+
+    // Calculate absentees per day
+    const dailyBreakdown = dailyAttendance.map(day => {
+      const attendedIds = day.participants.map(p => p.participantId.toString());
+      const absentees = allParticipants.filter(
+        p => !attendedIds.includes(p._id.toString())
+      ).map(p => ({
+        participantId: p._id,
+        name: p.name,
+        email: p.email,
+        track: p.track,
+      }));
+
+      return {
+        date: day._id,
+        totalRegistered: allParticipants.length,
+        presentCount: day.presentCount,
+        absentCount: absentees.length,
+        attendanceRate: ((day.presentCount / allParticipants.length) * 100).toFixed(2),
+        attendees: day.participants,
+        absentees,
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        event: {
+          id: event._id,
+          name: event.name,
+          startDate: event.startDate,
+          endDate: event.endDate,
+        },
+        dailyBreakdown,
       },
     });
   } catch (error) {

@@ -39,7 +39,19 @@ const participantSchema = new mongoose.Schema({
   track: {
     type: String,
     trim: true,
-    maxlength: [100, 'Track cannot exceed 100 characters'],
+    enum: ['Web and App', 'Networking', 'Cloud Computing', 'PCB', null],
+  },
+  // NEW: Track the current active track this participant is enrolled in
+  currentActiveTrack: {
+    type: String,
+    enum: ['Web and App', 'Networking', 'Cloud Computing', 'PCB', null],
+    default: null,
+  },
+  // NEW: Store the active event ID for track restriction
+  currentActiveTrackEvent: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Event',
+    default: null,
   },
   eventId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -71,6 +83,8 @@ participantSchema.index({ email: 1, eventId: 1 }, { unique: true });
 // Index for faster queries
 participantSchema.index({ eventId: 1 });
 participantSchema.index({ registeredAt: -1 });
+participantSchema.index({ email: 1, currentActiveTrack: 1 });
+participantSchema.index({ currentActiveTrackEvent: 1 });
 
 // Virtual for attendance records
 participantSchema.virtual('attendanceRecords', {
@@ -78,6 +92,54 @@ participantSchema.virtual('attendanceRecords', {
   localField: '_id',
   foreignField: 'participantId',
 });
+
+// Method to check if participant can register for a track
+participantSchema.methods.canRegisterForTrack = function(newTrack, newEventId) {
+  // If no track restriction, allow registration
+  if (!newTrack) return true;
+  
+  // If participant has no active track, allow registration
+  if (!this.currentActiveTrack) return true;
+  
+  // If registering for same event, allow (in case of re-registration)
+  if (this.currentActiveTrackEvent && 
+      this.currentActiveTrackEvent.toString() === newEventId.toString()) {
+    return true;
+  }
+  
+  // If registering for different track while having active track, block
+  if (this.currentActiveTrack && this.currentActiveTrack !== newTrack) {
+    return false;
+  }
+  
+  return true;
+};
+
+// Static method to check track availability for email
+participantSchema.statics.checkTrackAvailability = async function(email, trackName, eventId) {
+  // Find any active participant with this email in a track-based event
+  const existingParticipant = await this.findOne({
+    email: email.toLowerCase(),
+    currentActiveTrack: { $ne: null },
+    isActive: true,
+    eventId: { $ne: eventId }, // Different event
+  }).populate('currentActiveTrackEvent', 'isActive status isDeleted');
+  
+  if (!existingParticipant) return { available: true };
+  
+  // Check if the existing track event is still active
+  const trackEvent = existingParticipant.currentActiveTrackEvent;
+  if (trackEvent && trackEvent.isActive && !trackEvent.isDeleted && 
+      trackEvent.status !== 'completed' && trackEvent.status !== 'terminated') {
+    return {
+      available: false,
+      currentTrack: existingParticipant.currentActiveTrack,
+      currentEvent: existingParticipant.currentActiveTrackEvent,
+    };
+  }
+  
+  return { available: true };
+};
 
 // Enable virtuals in JSON
 participantSchema.set('toJSON', { virtuals: true });

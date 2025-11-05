@@ -1,5 +1,7 @@
 const express = require('express');
 const { body } = require('express-validator');
+const { checkEventAccess } = require('../middleware/checkEventCreator');
+const { getDailyAttendance, getComprehensiveReport } = require('../controllers/attendanceController');
 const {
   scanQRCode,
   getEventAttendance,
@@ -9,7 +11,8 @@ const {
   getAttendanceReport,
   getParticipantAttendance,
   markAllPresent,
-  downloadEventData
+  downloadEventData,
+  
 } = require('../controllers/attendanceController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { validate, validateObjectId } = require('../middleware/validateRequest');
@@ -53,7 +56,7 @@ router.post(
   authorize('admin', 'superadmin'),
   scanValidation,
   validate,
-  scanQRCode
+  scanQRCode // Already has permission check inside
 );
 
 router.get(
@@ -103,6 +106,14 @@ router.post(
   markAllPresent
 );
 
+router.get(
+  '/event/:eventId/comprehensive-report',
+  protect,
+  authorize('admin', 'superadmin'),
+  validateObjectId('eventId'),
+  getComprehensiveReport
+);
+
 // Download event data
 router.get(
   '/download/:eventId',
@@ -110,6 +121,16 @@ router.get(
   authorize('admin', 'superadmin'),
   validateObjectId('eventId'),
   downloadEventData
+);
+
+
+
+router.get(
+  '/event/:eventId/daily',
+  protect,
+  authorize('admin', 'superadmin'),
+  validateObjectId('eventId'),
+  getDailyAttendance
 );
 
 module.exports = router;

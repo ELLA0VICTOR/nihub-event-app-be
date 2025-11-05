@@ -1,5 +1,7 @@
 const express = require('express');
 const { body } = require('express-validator');
+const { checkTrackEligibility } = require('../controllers/participantController');
+const EventPermission = require('../models/EventPermission');
 const {
   registerParticipant,
   getEventParticipants,
@@ -78,14 +80,27 @@ router.get(
 router.route('/:id')
   .get(protect, authorize('admin', 'superadmin'), validateObjectId(), getParticipant)
   .put(protect, authorize('admin', 'superadmin'), validateObjectId(), updateParticipant)
-  .delete(protect, authorize('superadmin'), validateObjectId(), deleteParticipant);
-
+  .delete(
+    protect,
+    authorize('admin', 'superadmin'),
+    validateObjectId(),
+    deleteParticipant // Now has permission check inside
+  );
+  
 router.post(
   '/:id/resend-qr',
   protect,
   authorize('admin', 'superadmin'),
   validateObjectId(),
   resendQRCode
+);
+
+router.post(
+  '/check-track',
+  body('email').notEmpty().isEmail(),
+  body('eventId').notEmpty().isMongoId(),
+  validate,
+  checkTrackEligibility
 );
 
 module.exports = router;

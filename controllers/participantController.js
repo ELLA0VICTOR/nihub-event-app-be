@@ -4,19 +4,18 @@ const { generateQRCode } = require('../utils/qrGenerator');
 const { sendQRCodeEmail } = require('../utils/mailSender');
 
 /**
- * @desc    Register participant for event
+ * @desc    Register participant for event (FIXED - No manual track selection)
  * @route   POST /api/participants/register
  * @access  Public
  */
 exports.registerParticipant = async (req, res, next) => {
   try {
     const {
-      name,        
+      name,
       email,
       department,
-      matricNo,   
+      matricNo,
       gender,
-      track,
       eventId,
       phoneNumber,
     } = req.body;
@@ -24,7 +23,7 @@ exports.registerParticipant = async (req, res, next) => {
     // Handle photo if uploaded
     let photo = null;
     if (req.file) {
-      photo = req.file.path; // Save file path
+      photo = req.file.path;
     }
 
     // Check if event exists
@@ -37,15 +36,27 @@ exports.registerParticipant = async (req, res, next) => {
     }
 
     // Check if event is active
-    if (!event.isActive) {
+    if (!event.isActive || event.isDeleted) {
       return res.status(400).json({
         success: false,
         message: 'Event registration is closed',
       });
     }
 
-    // Check if already registered
-    const existingParticipant = await Participant.findOne({ email, eventId });
+    // Check if event has terminated
+    if (event.status === 'terminated' || event.status === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        message: `This event has been ${event.status}`,
+      });
+    }
+
+    // Check if already registered for THIS event
+    const existingParticipant = await Participant.findOne({ 
+      email: email.toLowerCase(), 
+      eventId 
+    });
+    
     if (existingParticipant) {
       return res.status(400).json({
         success: false,
@@ -64,15 +75,25 @@ exports.registerParticipant = async (req, res, next) => {
       }
     }
 
-    // Validate track exists in event
-    if (track && event.tracks && event.tracks.length > 0) {
-      const trackExists = event.tracks.some(t => 
-        t.trackAbbreviation === track || t.trackName === track
+    // FIXED: Get track from EVENT, not from participant input
+    const participantTrack = event.selectedTrack || null;
+
+    // NEW: TRACK RESTRICTION CHECK (only if event has a track)
+    if (participantTrack) {
+      const trackCheck = await Participant.checkTrackAvailability(
+        email.toLowerCase(),
+        participantTrack,
+        eventId
       );
-      if (!trackExists) {
+
+      if (!trackCheck.available) {
         return res.status(400).json({
           success: false,
-          message: 'Invalid track selected for this event',
+          message: `You are already registered for another track-based event: ${trackCheck.currentTrack}. Please contact an admin to remove you from that track before registering for this one.`,
+          data: {
+            currentTrack: trackCheck.currentTrack,
+            currentEventId: trackCheck.currentEvent,
+          },
         });
       }
     }
@@ -80,12 +101,14 @@ exports.registerParticipant = async (req, res, next) => {
     // Create participant
     const participant = await Participant.create({
       name,
-      email,
+      email: email.toLowerCase(),
       photo,
       department,
       matricNo,
       gender,
-      track,
+      track: participantTrack, // Track comes from EVENT
+      currentActiveTrack: participantTrack || null,
+      currentActiveTrackEvent: participantTrack ? eventId : null,
       eventId,
       phoneNumber,
     });
@@ -112,14 +135,24 @@ exports.registerParticipant = async (req, res, next) => {
 
     res.status(201).json({
       success: true,
-      message: 'Registration successful! QR code sent to your email.',
+      message: participantTrack 
+        ? `Registration successful for ${event.name} - ${participantTrack} track! QR code sent to your email. This QR code is valid for the entire event duration.`
+        : `Registration successful for ${event.name}! QR code sent to your email. This QR code is valid for the entire event duration.`,
       data: {
         participant: {
           id: participant._id,
           name: participant.name,
           email: participant.email,
+          track: participant.track,
           eventId: participant.eventId,
           qrCode: participant.qrCode,
+        },
+        event: {
+          name: event.name,
+          startDate: event.startDate,
+          endDate: event.endDate,
+          duration: event.duration,
+          track: participantTrack,
         },
       },
     });
@@ -300,6 +333,129 @@ exports.deleteParticipant = async (req, res, next) => {
     res.status(200).json({
       success: true,
       message: 'Participant deleted successfully',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+/**
+ * @desc    Delete participant (allows re-registration for different track)
+ * @route   DELETE /api/participants/:id
+ * @access  Private (Event Creator, Granted Admin, or Superadmin)
+ */
+exports.deleteParticipant = async (req, res, next) => {
+  try {
+    const participant = await Participant.findById(req.params.id).populate('eventId');
+
+    if (!participant) {
+      return res.status(404).json({
+        success: false,
+        message: 'Participant not found',
+      });
+    }
+
+    const event = participant.eventId;
+    const userId = req.user.id;
+    const userRole = req.user.role;
+
+    // Check permissions
+    let hasPermission = false;
+
+    if (userRole === 'superadmin') {
+      hasPermission = true;
+    } else if (event.createdBy.toString() === userId) {
+      hasPermission = true;
+    } else {
+      hasPermission = await EventPermission.hasPermission(userId, event._id, 'canEdit');
+    }
+
+    if (!hasPermission) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to delete participants from this event',
+      });
+    }
+
+    // Clear track restriction for this email
+    await Participant.updateMany(
+      {
+        email: participant.email,
+        currentActiveTrackEvent: event._id,
+      },
+      {
+        $set: {
+          currentActiveTrack: null,
+          currentActiveTrackEvent: null,
+        },
+      }
+    );
+
+    await participant.deleteOne();
+
+    res.status(200).json({
+      success: true,
+      message: 'Participant deleted successfully. They can now register for another track if needed.',
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+/**
+ * @desc    Check if email can register for a track
+ * @route   POST /api/participants/check-track
+ * @access  Public
+ */
+exports.checkTrackEligibility = async (req, res, next) => {
+  try {
+    const { email, trackName, eventId } = req.body;
+
+    if (!email || !eventId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email and event ID are required',
+      });
+    }
+
+    // If no track, allow registration
+    if (!trackName) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          canRegister: true,
+          message: 'No track restrictions apply',
+        },
+      });
+    }
+
+    const trackCheck = await Participant.checkTrackAvailability(
+      email.toLowerCase(),
+      trackName,
+      eventId
+    );
+
+    if (trackCheck.available) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          canRegister: true,
+          message: 'You can register for this track',
+        },
+      });
+    }
+
+    const currentEvent = await Event.findById(trackCheck.currentEvent);
+
+    res.status(200).json({
+      success: true,
+      data: {
+        canRegister: false,
+        message: `You are currently enrolled in ${trackCheck.currentTrack}`,
+        currentTrack: trackCheck.currentTrack,
+        currentEvent: {
+          id: currentEvent._id,
+          name: currentEvent.name,
+        },
+      },
     });
   } catch (error) {
     next(error);

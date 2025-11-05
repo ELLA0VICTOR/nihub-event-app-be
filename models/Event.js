@@ -17,6 +17,28 @@ const eventSchema = new mongoose.Schema({
     type: Date,
     required: [true, 'Event date is required'],
   },
+  // NEW: Multi-day event support
+  startDate: {
+    type: Date,
+    required: [true, 'Event start date is required'],
+  },
+  endDate: {
+    type: Date,
+    validate: {
+      validator: function(value) {
+        return !value || value >= this.startDate;
+      },
+      message: 'End date must be after or equal to start date',
+    },
+  },
+  duration: {
+    type: Number, // Duration in days
+    min: [1, 'Duration must be at least 1 day'],
+  },
+  autoTerminate: {
+    type: Boolean,
+    default: false, // If true, event auto-terminates after duration
+  },
   location: {
     type: String,
     required: [true, 'Event location is required'],
@@ -30,7 +52,7 @@ const eventSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['upcoming', 'ongoing', 'completed', 'cancelled'],
+    enum: ['upcoming', 'ongoing', 'completed', 'cancelled', 'terminated'],
     default: 'upcoming',
   },
   maxParticipants: {
@@ -41,11 +63,24 @@ const eventSchema = new mongoose.Schema({
     type: Boolean,
     default: true,
   },
-  // NEW FIELDS FOR FRONTEND COMPATIBILITY
+  isDeleted: {
+    type: Boolean,
+    default: false, // Soft delete to preserve attendance history
+  },
+  deletedAt: {
+    type: Date,
+  },
   imageUrl: {
     type: String,
     trim: true,
   },
+  // Track selection from predefined options
+  selectedTrack: {
+    type: String,
+    enum: ['Web and App', 'Networking', 'Cloud Computing', 'PCB', null],
+    default: null,
+  },
+  // Optional: Store track details if needed
   tracks: [{
     trackId: {
       type: String,
@@ -64,9 +99,29 @@ const eventSchema = new mongoose.Schema({
   timestamps: true,
 });
 
+// Pre-save middleware to set startDate and endDate
+eventSchema.pre('save', function(next) {
+  // If startDate not set, use date
+  if (!this.startDate) {
+    this.startDate = this.date;
+  }
+  
+  // Calculate endDate if duration is provided
+  if (this.duration && !this.endDate) {
+    const end = new Date(this.startDate);
+    end.setDate(end.getDate() + this.duration);
+    this.endDate = end;
+  }
+  
+  next();
+});
+
 // Index for faster queries
 eventSchema.index({ date: 1, status: 1 });
 eventSchema.index({ createdBy: 1 });
+eventSchema.index({ startDate: 1, endDate: 1 });
+eventSchema.index({ isDeleted: 1 });
+eventSchema.index({ selectedTrack: 1 });
 
 // Virtual for participant count
 eventSchema.virtual('participantCount', {
@@ -83,6 +138,42 @@ eventSchema.virtual('attendanceCount', {
   foreignField: 'eventId',
   count: true,
 });
+
+// Method to check if event is currently active
+eventSchema.methods.isEventActive = function() {
+  const now = new Date();
+  return (
+    this.isActive &&
+    !this.isDeleted &&
+    this.status !== 'terminated' &&
+    this.status !== 'cancelled' &&
+    (!this.endDate || now <= this.endDate)
+  );
+};
+
+// Method to check if event should auto-terminate
+eventSchema.methods.shouldAutoTerminate = function() {
+  if (!this.autoTerminate || !this.endDate) return false;
+  const now = new Date();
+  return now > this.endDate && this.status !== 'terminated';
+};
+
+// Static method to auto-terminate expired events
+eventSchema.statics.terminateExpiredEvents = async function() {
+  const now = new Date();
+  const result = await this.updateMany(
+    {
+      autoTerminate: true,
+      endDate: { $lt: now },
+      status: { $nin: ['terminated', 'cancelled', 'completed'] },
+      isDeleted: false,
+    },
+    {
+      $set: { status: 'terminated' },
+    }
+  );
+  return result;
+};
 
 // Enable virtuals in JSON
 eventSchema.set('toJSON', { virtuals: true });

@@ -6,6 +6,7 @@ const rateLimit = require('express-rate-limit');
 const dotenv = require('dotenv');
 const connectDB = require('./config/database');
 const errorHandler = require('./middleware/errorHandler');
+const { scheduleEventTermination } = require('./utils/cronJobs');
 
 // Load environment variables
 dotenv.config();
@@ -15,6 +16,9 @@ const app = express();
 
 // Connect to MongoDB
 connectDB();
+
+// Start cron jobs
+scheduleEventTermination();
 
 // Trust proxy - important for rate limiting behind reverse proxies
 app.set('trust proxy', 1);
@@ -83,6 +87,7 @@ app.use('/api/users', require('./routes/users'));
 app.use('/api/events', require('./routes/events'));
 app.use('/api/participants', require('./routes/participants'));
 app.use('/api/attendance', require('./routes/attendance'));
+app.use('/api/event-permissions', require('./routes/eventPermissions')); // NEW
 
 
 // 404 handler
