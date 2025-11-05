@@ -1,5 +1,7 @@
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const User = require('../models/User');
+const { sendVerificationEmail, sendEmail } = require('../utils/mailSender');
 
 /**
  * Generate JWT token
@@ -11,57 +13,205 @@ const generateToken = (id) => {
 };
 
 /**
- * @desc    Register first superadmin (one-time setup)
+ * @desc    Register superadmin with email verification
  * @route   POST /api/auth/register-superadmin
- * @access  Public (but should be protected in production)
+ * @access  Public
  */
 exports.registerSuperadmin = async (req, res, next) => {
   try {
     const { name, email, password } = req.body;
 
-    // Check if any superadmin exists
-    const existingSuperadmin = await User.findOne({ role: 'superadmin' });
-    if (existingSuperadmin) {
-      return res.status(400).json({
-        success: false,
-        message: 'Superadmin already exists. Use admin panel to create more users.',
-      });
-    }
-
     // Check if user already exists
-    const existingUser = await User.findOne({ email });
+    const existingUser = await User.findOne({ email: email.toLowerCase() });
     if (existingUser) {
+      if (!existingUser.isEmailVerified) {
+        return res.status(400).json({
+          success: false,
+          message: 'Registration pending. Please check your email for verification link or request a new one.',
+        });
+      }
       return res.status(400).json({
         success: false,
         message: 'User with this email already exists',
       });
     }
 
-    // Create first superadmin
+    // Generate email verification token
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    const hashedToken = crypto
+      .createHash('sha256')
+      .update(verificationToken)
+      .digest('hex');
+
+    // Create user with unverified status
     const user = await User.create({
       name,
-      email,
+      email: email.toLowerCase(),
       password,
       role: 'superadmin',
-      isApproved: true,
+      isEmailVerified: false,
+      isApproved: false, // Will be set to true after email verification
+      emailVerificationToken: hashedToken,
+      emailVerificationExpires: Date.now() + 24 * 60 * 60 * 1000, // 24 hours
     });
 
-    // Generate token
-    const token = generateToken(user._id);
+    // Create verification URL
+    const verificationUrl = `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}&email=${email}`;
 
-    res.status(201).json({
+    // Send verification email
+    try {
+      await sendVerificationEmail({
+        to: email,
+        name,
+        verificationUrl,
+      });
+
+      res.status(201).json({
+        success: true,
+        message: 'Registration successful! Please check your email to verify your account.',
+        data: {
+          email: user.email,
+          name: user.name,
+          requiresVerification: true,
+        },
+      });
+    } catch (emailError) {
+      // If email fails, delete the user and return error
+      await user.deleteOne();
+      console.error('Verification email error:', emailError);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to send verification email. Please try again.',
+      });
+    }
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Verify email with token
+ * @route   POST /api/auth/verify-email
+ * @access  Public
+ */
+exports.verifyEmail = async (req, res, next) => {
+  try {
+    const { token, email } = req.body;
+
+    if (!token || !email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Token and email are required',
+      });
+    }
+
+    // Hash the token to compare with stored hash
+    const hashedToken = crypto
+      .createHash('sha256')
+      .update(token)
+      .digest('hex');
+
+    // Find user with matching token and email
+    const user = await User.findOne({
+      email: email.toLowerCase(),
+      emailVerificationToken: hashedToken,
+      emailVerificationExpires: { $gt: Date.now() },
+    });
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid or expired verification token. Please request a new verification email.',
+      });
+    }
+
+    // Mark email as verified and approve account
+    user.isEmailVerified = true;
+    user.isApproved = true;
+    user.emailVerificationToken = undefined;
+    user.emailVerificationExpires = undefined;
+    await user.save();
+
+    // Generate auth token
+    const authToken = generateToken(user._id);
+
+    res.status(200).json({
       success: true,
-      message: 'Superadmin registered successfully',
+      message: 'Email verified successfully! You can now log in.',
       data: {
-        token,
+        token: authToken,
         user: {
           id: user._id,
           name: user.name,
           email: user.email,
           role: user.role,
           isApproved: user.isApproved,
+          isEmailVerified: user.isEmailVerified,
         },
       },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Resend verification email
+ * @route   POST /api/auth/resend-verification
+ * @access  Public
+ */
+exports.resendVerification = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is required',
+      });
+    }
+
+    // Find user
+    const user = await User.findOne({ email: email.toLowerCase() });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'No account found with this email',
+      });
+    }
+
+    if (user.isEmailVerified) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email is already verified. Please log in.',
+      });
+    }
+
+    // Generate new verification token
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    const hashedToken = crypto
+      .createHash('sha256')
+      .update(verificationToken)
+      .digest('hex');
+
+    user.emailVerificationToken = hashedToken;
+    user.emailVerificationExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
+    await user.save();
+
+    // Create verification URL
+    const verificationUrl = `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}&email=${email}`;
+
+    // Send verification email
+    await sendVerificationEmail({
+      to: email,
+      name: user.name,
+      verificationUrl,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Verification email sent! Please check your inbox.',
     });
   } catch (error) {
     next(error);
@@ -97,6 +247,16 @@ exports.login = async (req, res, next) => {
       });
     }
 
+    // Check if email is verified
+    if (!user.isEmailVerified) {
+      return res.status(403).json({
+        success: false,
+        message: 'Please verify your email before logging in. Check your inbox for the verification link.',
+        requiresVerification: true,
+        email: user.email,
+      });
+    }
+
     // Check password
     const isMatch = await user.comparePassword(password);
 
@@ -129,6 +289,7 @@ exports.login = async (req, res, next) => {
           email: user.email,
           role: user.role,
           isApproved: user.isApproved,
+          isEmailVerified: user.isEmailVerified,
         },
       },
     });

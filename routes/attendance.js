@@ -90,7 +90,7 @@ router.route('/:id')
     validate,
     updateAttendance
   )
-  .delete(protect, authorize('superadmin'), validateObjectId(), deleteAttendance);
+  .delete(protect, authorize('admin', 'superadmin'), validateObjectId(), deleteAttendance);
 
  
 
@@ -98,7 +98,7 @@ router.route('/:id')
 router.post(
   '/mark-all-present/:eventId',
   protect,
-  authorize('superadmin'),
+  authorize('admin', 'superadmin'),
   validateObjectId('eventId'),
   markAllPresent
 );

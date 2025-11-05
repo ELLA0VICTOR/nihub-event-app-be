@@ -5,7 +5,7 @@ const Attendance = require('../models/Attendance');
 /**
  * @desc    Create new event
  * @route   POST /api/events
- * @access  Private (Superadmin only)
+ * @access  Private (admin and superadmin)
  */
 exports.createEvent = async (req, res, next) => {
   try {
@@ -116,7 +116,7 @@ exports.getEvent = async (req, res, next) => {
 /**
  * @desc    Update event
  * @route   PUT /api/events/:id
- * @access  Private (Superadmin only)
+ * @access  Private (admin and superadmin)
  */
 exports.updateEvent = async (req, res, next) => {
   try {
@@ -165,7 +165,7 @@ exports.updateEvent = async (req, res, next) => {
 /**
  * @desc    Delete event
  * @route   DELETE /api/events/:id
- * @access  Private (Superadmin only)
+ * @access  Private (admin and superadmin)
  */
 exports.deleteEvent = async (req, res, next) => {
   try {

@@ -268,20 +268,9 @@ exports.deleteAttendance = async (req, res, next) => {
 };
 
 /**
- * @desc    Get attendance report for an event
+ * @desc    Get attendance report for an event (WITH ABSENTEE TRACKING)
  * @route   GET /api/attendance/event/:eventId/report
  * @access  Private (Admin/Superadmin)
- *
- * Response example:
- * {
- *   success: true,
- *   data: {
- *     totals: { total, present, late, excused, absent },
- *     percentages: { presentPct, latePct, excusedPct, absentPct },
- *     byDate: [ { date: '2025-10-21', total: 42, present: 40, late: 1, excused: 1 } ],
- *     topParticipants: [ { participantId, name, email, count } ]
- *   }
- * }
  */
 exports.getAttendanceReport = async (req, res, next) => {
   try {
@@ -294,7 +283,7 @@ exports.getAttendanceReport = async (req, res, next) => {
       });
     }
 
-    // Ensure event exists (routes call validateObjectId earlier)
+    // Ensure event exists
     const event = await Event.findById(eventId);
     if (!event) {
       return res.status(404).json({
@@ -303,7 +292,11 @@ exports.getAttendanceReport = async (req, res, next) => {
       });
     }
 
-    // Aggregation for totals per status and overall counts
+    // Get all registered participants for this event
+    const allParticipants = await Participant.find({ eventId, isActive: true });
+    const totalRegistered = allParticipants.length;
+
+    // Aggregation for totals per status
     const totalsAgg = await Attendance.aggregate([
       { $match: { eventId: event._id } },
       {
@@ -316,28 +309,48 @@ exports.getAttendanceReport = async (req, res, next) => {
 
     // Convert totalsAgg into an object with defaults
     const totals = {
-      total: 0,
+      totalRegistered,
       present: 0,
       late: 0,
       excused: 0,
-      absent: 0,
     };
 
     totalsAgg.forEach((t) => {
       totals[t._id] = t.count;
-      totals.total += t.count;
     });
 
-    // percentages (avoid division by zero)
-    const safeTotal = totals.total || 1;
+    // Calculate actual absent count (registered but not scanned)
+    const totalScanned = totals.present + totals.late + totals.excused;
+    totals.absent = totalRegistered - totalScanned;
+    totals.totalScanned = totalScanned;
+
+    // Get list of absentees (participants who didn't scan)
+    const attendedParticipantIds = await Attendance.find({ eventId })
+      .distinct('participantId');
+    
+    const absentees = allParticipants.filter(
+      p => !attendedParticipantIds.some(id => id.toString() === p._id.toString())
+    ).map(p => ({
+      participantId: p._id,
+      name: p.name,
+      email: p.email,
+      department: p.department,
+      matricNo: p.matricNo,
+      track: p.track,
+      gender: p.gender,
+    }));
+
+    // Percentages (avoid division by zero)
+    const safeTotal = totalRegistered || 1;
     const percentages = {
       presentPct: parseFloat(((totals.present / safeTotal) * 100).toFixed(2)),
       latePct: parseFloat(((totals.late / safeTotal) * 100).toFixed(2)),
       excusedPct: parseFloat(((totals.excused / safeTotal) * 100).toFixed(2)),
       absentPct: parseFloat(((totals.absent / safeTotal) * 100).toFixed(2)),
+      attendanceRate: parseFloat(((totalScanned / safeTotal) * 100).toFixed(2)),
     };
 
-    // Optional: breakdown by date (group by date of scannedAt)
+    // Breakdown by date
     const byDate = await Attendance.aggregate([
       { $match: { eventId: event._id } },
       {
@@ -355,12 +368,9 @@ exports.getAttendanceReport = async (req, res, next) => {
           excused: {
             $sum: { $cond: [{ $eq: ['$status', 'excused'] }, 1, 0] },
           },
-          absent: {
-            $sum: { $cond: [{ $eq: ['$status', 'absent'] }, 1, 0] },
-          },
         },
       },
-      { $sort: { _id: 1 } }, // ascending dates
+      { $sort: { _id: 1 } },
       {
         $project: {
           date: '$_id',
@@ -368,13 +378,12 @@ exports.getAttendanceReport = async (req, res, next) => {
           present: 1,
           late: 1,
           excused: 1,
-          absent: 1,
           _id: 0,
         },
       },
     ]);
 
-    // Top participants by attendance count (in case of multiple records per participant)
+    // Top participants by attendance count
     const topParticipants = await Attendance.aggregate([
       { $match: { eventId: event._id } },
       {
@@ -411,6 +420,7 @@ exports.getAttendanceReport = async (req, res, next) => {
       data: {
         totals,
         percentages,
+        absentees,
         byDate,
         topParticipants,
       },

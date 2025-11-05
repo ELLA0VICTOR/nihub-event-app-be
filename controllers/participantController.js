@@ -282,7 +282,7 @@ exports.updateParticipant = async (req, res, next) => {
 /**
  * @desc    Delete participant
  * @route   DELETE /api/participants/:id
- * @access  Private (Superadmin only)
+ * @access  Private (Admin/Superadmin)
  */
 exports.deleteParticipant = async (req, res, next) => {
   try {

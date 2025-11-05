@@ -52,28 +52,33 @@ const eventValidation = [
 
 // Routes
 router.route('/')
-  .get(getAllEvents)  // Make public - no protect middleware
+  .get(getAllEvents)  // Public
   .post(
     protect,
-    authorize('superadmin'),
-    mapEventFields,  // Map field names
+    authorize('admin', 'superadmin'),  // BOTH can create events
+    mapEventFields,
     eventValidation,
     validate,
     createEvent
   );
 
 router.route('/:id')
-  .get(getEvent)  // Make public
+  .get(getEvent)  // Public
   .put(
     protect,
-    authorize('superadmin'),
+    authorize('admin', 'superadmin'),  // BOTH can update events
     validateObjectId(),
     mapEventFields,
     eventValidation,
     validate,
     updateEvent
   )
-  .delete(protect, authorize('superadmin'), validateObjectId(), deleteEvent);
+  .delete(
+    protect, 
+    authorize('admin', 'superadmin'),  // BOTH can delete events
+    validateObjectId(), 
+    deleteEvent
+  );
 
 router.get('/:id/stats', protect, validateObjectId(), getEventStats);
 

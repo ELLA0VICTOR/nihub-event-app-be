@@ -35,7 +35,15 @@ exports.protect = async (req, res, next) => {
         });
       }
 
-      // Check if user is approved (except for superadmin)
+      // Check if email is verified
+      if (!req.user.isEmailVerified) {
+        return res.status(403).json({
+          success: false,
+          message: 'Please verify your email address to access this resource',
+        });
+      }
+
+      // Check if user is approved (except for superadmin and admin)
       if (req.user.role !== 'superadmin' && !req.user.isApproved) {
         return res.status(403).json({
           success: false,
@@ -54,7 +62,6 @@ exports.protect = async (req, res, next) => {
     next(error);
   }
 };
-
 /**
  * Authorize based on user roles
  */
