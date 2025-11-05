@@ -487,13 +487,12 @@ exports.getAttendanceReport = async (req, res, next) => {
   }
 };
 
-
 /**
- * @desc    Get comprehensive attendance report with first-day logic
- * @route   GET /api/attendance/event/:eventId/comprehensive-report
+ * @desc    Get downloadable attendance report (FINAL VERSION)
+ * @route   GET /api/attendance/event/:eventId/download-report
  * @access  Private (Admin/Superadmin)
  */
-exports.getComprehensiveReport = async (req, res, next) => {
+exports.getDownloadableReport = async (req, res, next) => {
   try {
     const { eventId } = req.params;
 
@@ -507,7 +506,7 @@ exports.getComprehensiveReport = async (req, res, next) => {
 
     // Get all participants
     const allParticipants = await Participant.find({ eventId, isActive: true })
-      .select('name email track department matricNo registeredAt')
+      .select('name email track matricNo registeredAt')
       .lean();
 
     if (allParticipants.length === 0) {
@@ -516,17 +515,17 @@ exports.getComprehensiveReport = async (req, res, next) => {
         message: 'No participants registered for this event yet',
         data: {
           event: {
-            id: event._id,
             name: event.name,
-            track: event.selectedTrack,
+            track: event.selectedTrack || null,
+            startDate: event.startDate,
+            endDate: event.endDate,
           },
-          participants: [],
-          dailyReports: [],
+          attendanceRecords: [],
         },
       });
     }
 
-    // Find the FIRST registration date (this is when event effectively started)
+    // Find the FIRST registration date (event effectively started)
     const firstRegistrationDate = new Date(
       Math.min(...allParticipants.map(p => new Date(p.registeredAt)))
     );
@@ -546,39 +545,38 @@ exports.getComprehensiveReport = async (req, res, next) => {
       })
     )].sort((a, b) => a - b);
 
-    // If no one has attended yet, show all as absent
+    // If no attendance records yet, all are absent
     if (attendanceDates.length === 0) {
-      const report = allParticipants.map(p => ({
-        participantId: p._id,
-        name: p.name,
-        email: p.email,
-        track: p.track || 'N/A',
-        department: p.department || 'N/A',
+      const records = allParticipants.map(p => ({
+        eventName: event.name,
+        track: event.selectedTrack || 'N/A',
+        participantName: p.name,
         matricNo: p.matricNo || 'N/A',
-        registeredAt: p.registeredAt,
-        attendanceStatus: 'No attendance records yet',
-        totalDaysPresent: 0,
-        totalDaysAbsent: 0,
+        status: 'Absent',
+        date: firstRegistrationDate.toISOString().split('T')[0],
+        reason: 'No attendance recorded yet',
       }));
 
       return res.status(200).json({
         success: true,
         data: {
           event: {
-            id: event._id,
             name: event.name,
-            track: event.selectedTrack,
+            track: event.selectedTrack || null,
+            eventStartDate: firstRegistrationDate,
           },
-          eventStartDate: firstRegistrationDate,
-          totalParticipants: allParticipants.length,
-          participants: report,
-          dailyReports: [],
+          summary: {
+            totalParticipants: allParticipants.length,
+            totalPresent: 0,
+            totalAbsent: allParticipants.length,
+          },
+          attendanceRecords: records,
         },
       });
     }
 
-    // Generate daily reports
-    const dailyReports = [];
+    // Build comprehensive attendance records
+    const attendanceRecords = [];
 
     for (const dateTimestamp of attendanceDates) {
       const date = new Date(dateTimestamp);
@@ -600,94 +598,58 @@ exports.getComprehensiveReport = async (req, res, next) => {
 
       const attendedIds = dateAttendance.map(a => a.participantId.toString());
 
-      // Calculate present and absent
-      const present = registeredByThisDate.filter(p => 
-        attendedIds.includes(p._id.toString())
-      );
+      // Create records for each registered participant
+      for (const participant of registeredByThisDate) {
+        const didAttend = attendedIds.includes(participant._id.toString());
+        const attendanceRecord = dateAttendance.find(
+          a => a.participantId.toString() === participant._id.toString()
+        );
 
-      const absent = registeredByThisDate.filter(p => 
-        !attendedIds.includes(p._id.toString())
-      );
-
-      dailyReports.push({
-        date: dateString,
-        dayNumber: dailyReports.length + 1,
-        totalRegistered: registeredByThisDate.length,
-        presentCount: present.length,
-        absentCount: absent.length,
-        attendanceRate: ((present.length / registeredByThisDate.length) * 100).toFixed(2) + '%',
-        present: present.map(p => ({
-          name: p.name,
-          email: p.email,
-          track: p.track || 'N/A',
-          matricNo: p.matricNo || 'N/A',
-        })),
-        absent: absent.map(p => ({
-          name: p.name,
-          email: p.email,
-          track: p.track || 'N/A',
-          matricNo: p.matricNo || 'N/A',
-          reason: new Date(p.registeredAt) > date 
-            ? 'Registered after this date' 
-            : 'Did not attend',
-        })),
-      });
+        attendanceRecords.push({
+          eventName: event.name,
+          track: event.selectedTrack || 'N/A',
+          participantName: participant.name,
+          matricNo: participant.matricNo || 'N/A',
+          status: didAttend ? 'Present' : 'Absent',
+          date: dateString,
+          scannedAt: didAttend && attendanceRecord 
+            ? attendanceRecord.scannedAt 
+            : null,
+          reason: !didAttend 
+            ? (new Date(participant.registeredAt) > date 
+                ? 'Not registered yet' 
+                : 'Did not attend')
+            : null,
+        });
+      }
     }
 
-    // Generate participant summary
-    const participantSummary = allParticipants.map(p => {
-      const participantAttendance = allAttendance.filter(a => 
-        a.participantId.toString() === p._id.toString()
-      );
-
-      // Count days participant should have attended
-      const regDate = new Date(p.registeredAt);
-      regDate.setHours(0, 0, 0, 0);
-      
-      const applicableDates = attendanceDates.filter(d => d >= regDate.getTime());
-      const totalDaysApplicable = applicableDates.length;
-      const totalDaysPresent = participantAttendance.length;
-      const totalDaysAbsent = totalDaysApplicable - totalDaysPresent;
-
-      return {
-        participantId: p._id,
-        name: p.name,
-        email: p.email,
-        track: p.track || 'N/A',
-        department: p.department || 'N/A',
-        matricNo: p.matricNo || 'N/A',
-        registeredAt: p.registeredAt,
-        totalDaysApplicable,
-        totalDaysPresent,
-        totalDaysAbsent,
-        attendanceRate: totalDaysApplicable > 0 
-          ? ((totalDaysPresent / totalDaysApplicable) * 100).toFixed(2) + '%'
-          : 'N/A',
-      };
-    });
+    // Calculate summary
+    const totalPresent = attendanceRecords.filter(r => r.status === 'Present').length;
+    const totalAbsent = attendanceRecords.filter(r => r.status === 'Absent').length;
 
     res.status(200).json({
       success: true,
       data: {
         event: {
-          id: event._id,
           name: event.name,
-          track: event.selectedTrack || 'No track',
-          startDate: event.startDate,
-          endDate: event.endDate,
+          track: event.selectedTrack || null,
+          eventStartDate: firstRegistrationDate,
+          totalDays: attendanceDates.length,
         },
-        eventStartDate: firstRegistrationDate,
-        totalParticipants: allParticipants.length,
-        totalAttendanceDays: attendanceDates.length,
-        participants: participantSummary,
-        dailyReports,
+        summary: {
+          totalParticipants: allParticipants.length,
+          totalPresent,
+          totalAbsent,
+          attendanceRate: ((totalPresent / (totalPresent + totalAbsent)) * 100).toFixed(2) + '%',
+        },
+        attendanceRecords,
       },
     });
   } catch (error) {
     next(error);
   }
 };
-
 
 
 /**

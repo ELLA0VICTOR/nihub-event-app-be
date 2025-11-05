@@ -1,7 +1,8 @@
 const express = require('express');
 const { body } = require('express-validator');
 const { checkEventAccess } = require('../middleware/checkEventCreator');
-const { getDailyAttendance, getComprehensiveReport } = require('../controllers/attendanceController');
+const { getDailyAttendance } = require('../controllers/attendanceController');
+const { getDownloadableReport } = require('../controllers/attendanceController');
 const {
   scanQRCode,
   getEventAttendance,
@@ -107,11 +108,11 @@ router.post(
 );
 
 router.get(
-  '/event/:eventId/comprehensive-report',
+  '/event/:eventId/download-report',
   protect,
   authorize('admin', 'superadmin'),
   validateObjectId('eventId'),
-  getComprehensiveReport
+  getDownloadableReport
 );
 
 // Download event data
