@@ -26,6 +26,13 @@ exports.createEvent = async (req, res, next) => {
       tracks,
     } = req.body;
 
+    // Handle uploaded image file
+    let finalImageUrl = imageUrl;
+    if (req.file) {
+      // If file was uploaded, use the file path
+      finalImageUrl = `/uploads/${req.file.filename}`;
+    }
+
     // Calculate dates if not provided
     let calculatedStartDate = startDate || date;
     let calculatedEndDate = endDate;
@@ -34,6 +41,14 @@ exports.createEvent = async (req, res, next) => {
       const end = new Date(calculatedStartDate);
       end.setDate(end.getDate() + parseInt(duration));
       calculatedEndDate = end;
+    }
+
+    // Ensure we have a date value
+    if (!calculatedStartDate) {
+      return res.status(400).json({
+        success: false,
+        message: 'Start date or date is required',
+      });
     }
 
     const event = await Event.create({
@@ -45,11 +60,11 @@ exports.createEvent = async (req, res, next) => {
       duration: duration ? parseInt(duration) : undefined,
       autoTerminate: autoTerminate || false,
       location,
-      maxParticipants,
-      status,
-      imageUrl,
+      maxParticipants: maxParticipants ? parseInt(maxParticipants) : undefined,
+      status: status || 'upcoming',
+      imageUrl: finalImageUrl,
       selectedTrack: selectedTrack || null,
-      tracks: tracks || [],
+      tracks: tracks ? (typeof tracks === 'string' ? JSON.parse(tracks) : tracks) : [],
       createdBy: req.user.id,
     });
 
@@ -63,6 +78,15 @@ exports.createEvent = async (req, res, next) => {
       },
     });
   } catch (error) {
+    // Clean up uploaded file if event creation fails
+    if (req.file) {
+      const fs = require('fs');
+      const path = require('path');
+      const filePath = path.join(__dirname, '..', 'uploads', req.file.filename);
+      if (fs.existsSync(filePath)) {
+        fs.unlinkSync(filePath);
+      }
+    }
     next(error);
   }
 };
@@ -202,6 +226,23 @@ exports.updateEvent = async (req, res, next) => {
       });
     }
 
+    // Handle uploaded image file
+    let finalImageUrl = imageUrl || event.imageUrl;
+    if (req.file) {
+      // If new file was uploaded, use the new file path
+      finalImageUrl = `/uploads/${req.file.filename}`;
+      
+      // Optionally delete old image file
+      if (event.imageUrl && event.imageUrl.startsWith('/uploads/')) {
+        const fs = require('fs');
+        const path = require('path');
+        const oldFilePath = path.join(__dirname, '..', event.imageUrl);
+        if (fs.existsSync(oldFilePath)) {
+          fs.unlinkSync(oldFilePath);
+        }
+      }
+    }
+
     // Calculate new dates if duration changed
     let calculatedEndDate = endDate;
     if (duration && !endDate) {
@@ -214,20 +255,20 @@ exports.updateEvent = async (req, res, next) => {
     event = await Event.findByIdAndUpdate(
       req.params.id,
       {
-        name,
-        description,
-        date: startDate || date,
-        startDate: startDate || date,
-        endDate: calculatedEndDate,
+        name: name || event.name,
+        description: description !== undefined ? description : event.description,
+        date: startDate || date || event.date,
+        startDate: startDate || date || event.startDate,
+        endDate: calculatedEndDate !== undefined ? calculatedEndDate : event.endDate,
         duration: duration ? parseInt(duration) : event.duration,
-        autoTerminate,
-        location,
-        maxParticipants,
-        status,
-        isActive,
-        imageUrl,
-        selectedTrack,
-        tracks,
+        autoTerminate: autoTerminate !== undefined ? autoTerminate : event.autoTerminate,
+        location: location || event.location,
+        maxParticipants: maxParticipants ? parseInt(maxParticipants) : event.maxParticipants,
+        status: status || event.status,
+        isActive: isActive !== undefined ? isActive : event.isActive,
+        imageUrl: finalImageUrl,
+        selectedTrack: selectedTrack !== undefined ? selectedTrack : event.selectedTrack,
+        tracks: tracks ? (typeof tracks === 'string' ? JSON.parse(tracks) : tracks) : event.tracks,
       },
       {
         new: true,

@@ -5,6 +5,8 @@ const { getDailyAttendance } = require('../controllers/attendanceController');
 const { getDownloadableReport } = require('../controllers/attendanceController');
 const {
   scanQRCode,
+  verifyQRCode, // NEW
+  markPresent, // NEW
   getEventAttendance,
   getAttendance,
   updateAttendance,
@@ -13,7 +15,6 @@ const {
   getParticipantAttendance,
   markAllPresent,
   downloadEventData,
-  
 } = require('../controllers/attendanceController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { validate, validateObjectId } = require('../middleware/validateRequest');
@@ -21,6 +22,35 @@ const { validate, validateObjectId } = require('../middleware/validateRequest');
 const router = express.Router();
 
 // Validation rules
+const verifyQRValidation = [
+  body('participantId')
+    .notEmpty()
+    .withMessage('Participant ID is required')
+    .isMongoId()
+    .withMessage('Invalid participant ID'),
+  body('eventId')
+    .optional()
+    .isMongoId()
+    .withMessage('Invalid event ID'),
+];
+
+const markPresentValidation = [
+  body('participantId')
+    .notEmpty()
+    .withMessage('Participant ID is required')
+    .isMongoId()
+    .withMessage('Invalid participant ID'),
+  body('eventId')
+    .optional()
+    .isMongoId()
+    .withMessage('Invalid event ID'),
+  body('notes')
+    .optional()
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage('Notes cannot exceed 500 characters'),
+];
+
 const scanValidation = [
   body('participantId')
     .notEmpty()
@@ -51,13 +81,35 @@ const updateAttendanceValidation = [
 ];
 
 // Routes
+
+// NEW: Verify QR code and get participant details (no attendance marking)
+router.post(
+  '/verify-qr',
+  protect,
+  authorize('admin', 'superadmin'),
+  verifyQRValidation,
+  validate,
+  verifyQRCode
+);
+
+// NEW: Mark attendance after manual verification
+router.post(
+  '/mark-present',
+  protect,
+  authorize('admin', 'superadmin'),
+  markPresentValidation,
+  validate,
+  markPresent
+);
+
+// OLD: Direct scan (kept for backward compatibility, but consider deprecating)
 router.post(
   '/scan',
   protect,
   authorize('admin', 'superadmin'),
   scanValidation,
   validate,
-  scanQRCode // Already has permission check inside
+  scanQRCode
 );
 
 router.get(
@@ -96,8 +148,6 @@ router.route('/:id')
   )
   .delete(protect, authorize('admin', 'superadmin'), validateObjectId(), deleteAttendance);
 
- 
-
 // Mark all participants as present (Superadmin only)
 router.post(
   '/mark-all-present/:eventId',
@@ -123,8 +173,6 @@ router.get(
   validateObjectId('eventId'),
   downloadEventData
 );
-
-
 
 router.get(
   '/event/:eventId/daily',

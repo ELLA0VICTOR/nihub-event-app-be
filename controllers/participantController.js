@@ -4,7 +4,7 @@ const { generateQRCode } = require('../utils/qrGenerator');
 const { sendQRCodeEmail } = require('../utils/mailSender');
 
 /**
- * @desc    Register participant for event (FIXED - No manual track selection)
+ * @desc    Register participant for event (FIXED - Photo path corrected)
  * @route   POST /api/participants/register
  * @access  Public
  */
@@ -20,10 +20,11 @@ exports.registerParticipant = async (req, res, next) => {
       phoneNumber,
     } = req.body;
 
-    // Handle photo if uploaded
+    // Handle photo if uploaded - FIX: Ensure leading slash
     let photo = null;
     if (req.file) {
-      photo = req.file.path;
+      // FIX: Add leading slash to make it absolute URL
+      photo = `/uploads/${req.file.filename}`;
     }
 
     // Check if event exists
@@ -75,10 +76,10 @@ exports.registerParticipant = async (req, res, next) => {
       }
     }
 
-    // FIXED: Get track from EVENT, not from participant input
+    // Get track from EVENT, not from participant input
     const participantTrack = event.selectedTrack || null;
 
-    // NEW: TRACK RESTRICTION CHECK (only if event has a track)
+    // TRACK RESTRICTION CHECK (only if event has a track)
     if (participantTrack) {
       const trackCheck = await Participant.checkTrackAvailability(
         email.toLowerCase(),
@@ -102,11 +103,11 @@ exports.registerParticipant = async (req, res, next) => {
     const participant = await Participant.create({
       name,
       email: email.toLowerCase(),
-      photo,
+      photo, // Now has leading slash
       department,
       matricNo,
       gender,
-      track: participantTrack, // Track comes from EVENT
+      track: participantTrack,
       currentActiveTrack: participantTrack || null,
       currentActiveTrackEvent: participantTrack ? eventId : null,
       eventId,
@@ -130,14 +131,13 @@ exports.registerParticipant = async (req, res, next) => {
       });
     } catch (emailError) {
       console.error('Email sending failed:', emailError);
-      // Don't fail registration if email fails
     }
 
     res.status(201).json({
       success: true,
       message: participantTrack 
-        ? `Registration successful for ${event.name} - ${participantTrack} track! QR code sent to your email. This QR code is valid for the entire event duration.`
-        : `Registration successful for ${event.name}! QR code sent to your email. This QR code is valid for the entire event duration.`,
+        ? `Registration successful for ${event.name} - ${participantTrack} track! QR code sent to your email.`
+        : `Registration successful for ${event.name}! QR code sent to your email.`,
       data: {
         participant: {
           id: participant._id,
@@ -146,6 +146,7 @@ exports.registerParticipant = async (req, res, next) => {
           track: participant.track,
           eventId: participant.eventId,
           qrCode: participant.qrCode,
+          photo: participant.photo, // This will now have the correct path
         },
         event: {
           name: event.name,
@@ -161,17 +162,13 @@ exports.registerParticipant = async (req, res, next) => {
   }
 };
 
-/**
- * @desc    Get all participants for an event
- * @route   GET /api/participants/event/:eventId
- * @access  Private (Admin/Superadmin)
- */
+// ... rest of your controller methods remain the same ...
+
 exports.getEventParticipants = async (req, res, next) => {
   try {
     const { eventId } = req.params;
     const { page = 1, limit = 20, search, gender, department } = req.query;
 
-    // Check if event exists
     const event = await Event.findById(eventId);
     if (!event) {
       return res.status(404).json({
@@ -180,7 +177,6 @@ exports.getEventParticipants = async (req, res, next) => {
       });
     }
 
-    // Build query
     const query = { eventId };
 
     if (search) {
@@ -199,7 +195,6 @@ exports.getEventParticipants = async (req, res, next) => {
       query.department = { $regex: department, $options: 'i' };
     }
 
-    // Pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     const participants = await Participant.find(query)
@@ -225,11 +220,6 @@ exports.getEventParticipants = async (req, res, next) => {
   }
 };
 
-/**
- * @desc    Get single participant
- * @route   GET /api/participants/:id
- * @access  Private (Admin/Superadmin)
- */
 exports.getParticipant = async (req, res, next) => {
   try {
     const participant = await Participant.findById(req.params.id)
@@ -253,11 +243,6 @@ exports.getParticipant = async (req, res, next) => {
   }
 };
 
-/**
- * @desc    Update participant
- * @route   PUT /api/participants/:id
- * @access  Private (Admin/Superadmin)
- */
 exports.updateParticipant = async (req, res, next) => {
   try {
     const {
@@ -312,37 +297,6 @@ exports.updateParticipant = async (req, res, next) => {
   }
 };
 
-/**
- * @desc    Delete participant
- * @route   DELETE /api/participants/:id
- * @access  Private (Admin/Superadmin)
- */
-exports.deleteParticipant = async (req, res, next) => {
-  try {
-    const participant = await Participant.findById(req.params.id);
-
-    if (!participant) {
-      return res.status(404).json({
-        success: false,
-        message: 'Participant not found',
-      });
-    }
-
-    await participant.deleteOne();
-
-    res.status(200).json({
-      success: true,
-      message: 'Participant deleted successfully',
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-/**
- * @desc    Delete participant (allows re-registration for different track)
- * @route   DELETE /api/participants/:id
- * @access  Private (Event Creator, Granted Admin, or Superadmin)
- */
 exports.deleteParticipant = async (req, res, next) => {
   try {
     const participant = await Participant.findById(req.params.id).populate('eventId');
@@ -358,7 +312,6 @@ exports.deleteParticipant = async (req, res, next) => {
     const userId = req.user.id;
     const userRole = req.user.role;
 
-    // Check permissions
     let hasPermission = false;
 
     if (userRole === 'superadmin') {
@@ -376,7 +329,6 @@ exports.deleteParticipant = async (req, res, next) => {
       });
     }
 
-    // Clear track restriction for this email
     await Participant.updateMany(
       {
         email: participant.email,
@@ -400,11 +352,7 @@ exports.deleteParticipant = async (req, res, next) => {
     next(error);
   }
 };
-/**
- * @desc    Check if email can register for a track
- * @route   POST /api/participants/check-track
- * @access  Public
- */
+
 exports.checkTrackEligibility = async (req, res, next) => {
   try {
     const { email, trackName, eventId } = req.body;
@@ -416,7 +364,6 @@ exports.checkTrackEligibility = async (req, res, next) => {
       });
     }
 
-    // If no track, allow registration
     if (!trackName) {
       return res.status(200).json({
         success: true,
@@ -462,11 +409,6 @@ exports.checkTrackEligibility = async (req, res, next) => {
   }
 };
 
-/**
- * @desc    Resend QR code to participant
- * @route   POST /api/participants/:id/resend-qr
- * @access  Private (Admin/Superadmin)
- */
 exports.resendQRCode = async (req, res, next) => {
   try {
     const participant = await Participant.findById(req.params.id)
@@ -479,7 +421,6 @@ exports.resendQRCode = async (req, res, next) => {
       });
     }
 
-    // Send QR code via email
     await sendQRCodeEmail({
       to: participant.email,
       name: participant.name,

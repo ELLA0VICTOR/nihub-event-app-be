@@ -13,6 +13,7 @@ const {
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { validate, validateObjectId } = require('../middleware/validateRequest');
 const { mapEventFields } = require('../middleware/fieldMapper');
+const upload = require('../utils/fileUpload'); 
 
 const router = express.Router();
 
@@ -62,6 +63,7 @@ router.route('/')
   .post(
     protect,
     authorize('admin', 'superadmin'), // Both can create
+    upload.single('image'),
     mapEventFields,
     eventValidation,
     validate,
@@ -77,6 +79,7 @@ router.route('/:id')
     protect,
     authorize('admin', 'superadmin'), // Creator check happens in controller
     validateObjectId(),
+    upload.single('image'),
     mapEventFields,
     eventValidation,
     validate,

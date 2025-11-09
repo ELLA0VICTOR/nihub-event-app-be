@@ -4,6 +4,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const dotenv = require('dotenv');
+const path = require('path');
 const connectDB = require('./config/database');
 const errorHandler = require('./middleware/errorHandler');
 const { scheduleEventTermination } = require('./utils/cronJobs');
@@ -23,25 +24,57 @@ scheduleEventTermination();
 // Trust proxy - important for rate limiting behind reverse proxies
 app.set('trust proxy', 1);
 
-// Security middleware
-app.use(helmet());
+// ===== CRITICAL FIX: CORS Configuration =====
+// Must be BEFORE routes to apply to all requests including static files
+const corsOptions = {
+  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  exposedHeaders: ['Content-Length', 'Content-Type'],
+  maxAge: 86400 // 24 hours
+};
 
-// Rate limiting
+app.use(cors(corsOptions));
+
+// Handle preflight requests
+app.options('*', cors(corsOptions));
+
+// ===== Security middleware (MODIFIED for images) =====
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" }, // Allow images from different origin
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "blob:", process.env.FRONTEND_URL || 'http://localhost:3000'],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+    },
+  },
+}));
+
+// ===== STATIC FILES - Must be early in middleware chain =====
+// Serve uploads with proper headers
+app.use('/uploads', (req, res, next) => {
+  // Set CORS headers explicitly for static files
+  res.header('Access-Control-Allow-Origin', process.env.FRONTEND_URL || 'http://localhost:3000');
+  res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Cross-Origin-Resource-Policy', 'cross-origin');
+  next();
+}, express.static(path.join(__dirname, 'uploads')));
+
+// Rate limiting (AFTER static files to not rate-limit images)
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
   max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
   message: 'Too many requests from this IP, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
+  skip: (req) => req.path.startsWith('/uploads'), // Don't rate limit image requests
 });
 
 app.use('/api/', limiter);
-
-// CORS configuration
-app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-  credentials: true,
-}));
 
 // Body parser middleware
 app.use(express.json({ limit: '10mb' }));
@@ -53,8 +86,6 @@ if (process.env.NODE_ENV === 'development') {
 } else {
   app.use(morgan('combined'));
 }
-
-app.use('/uploads', express.static('uploads'));
 
 // Health check route
 app.get('/health', (req, res) => {
@@ -87,8 +118,7 @@ app.use('/api/users', require('./routes/users'));
 app.use('/api/events', require('./routes/events'));
 app.use('/api/participants', require('./routes/participants'));
 app.use('/api/attendance', require('./routes/attendance'));
-app.use('/api/event-permissions', require('./routes/eventPermissions')); // NEW
-
+app.use('/api/event-permissions', require('./routes/eventPermissions'));
 
 // 404 handler
 app.use((req, res) => {
@@ -106,6 +136,8 @@ const PORT = process.env.PORT || 5000;
 
 const server = app.listen(PORT, () => {
   console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
+  console.log(`Static files served from: ${path.join(__dirname, 'uploads')}`);
+  console.log(`CORS enabled for: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
 });
 
 // Handle unhandled promise rejections
