@@ -24,10 +24,26 @@ scheduleEventTermination();
 // Trust proxy - important for rate limiting behind reverse proxies
 app.set('trust proxy', 1);
 
-// ===== CRITICAL FIX: CORS Configuration =====
-// Must be BEFORE routes to apply to all requests including static files
+// ===== CRITICAL FIX: CORS Configuration with Multiple Origins =====
+// Parse allowed origins from environment variable
+const allowedOrigins = process.env.FRONTEND_URL 
+  ? process.env.FRONTEND_URL.split(',').map(url => url.trim())
+  : ['http://localhost:3000'];
+
+console.log('Allowed CORS origins:', allowedOrigins);
+
 const corsOptions = {
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.log('Blocked by CORS:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
@@ -46,7 +62,7 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      imgSrc: ["'self'", "data:", "blob:", process.env.FRONTEND_URL || 'http://localhost:3000'],
+      imgSrc: ["'self'", "data:", "blob:", ...allowedOrigins],
       styleSrc: ["'self'", "'unsafe-inline'"],
       scriptSrc: ["'self'"],
     },
@@ -56,8 +72,15 @@ app.use(helmet({
 // ===== STATIC FILES - Must be early in middleware chain =====
 // Serve uploads with proper headers
 app.use('/uploads', (req, res, next) => {
+  const origin = req.headers.origin;
+  
   // Set CORS headers explicitly for static files
-  res.header('Access-Control-Allow-Origin', process.env.FRONTEND_URL || 'http://localhost:3000');
+  if (origin && allowedOrigins.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+  } else if (allowedOrigins.length > 0) {
+    res.header('Access-Control-Allow-Origin', allowedOrigins[0]);
+  }
+  
   res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.header('Cross-Origin-Resource-Policy', 'cross-origin');
@@ -93,6 +116,7 @@ app.get('/health', (req, res) => {
     success: true,
     message: 'Server is running',
     timestamp: new Date().toISOString(),
+    allowedOrigins: allowedOrigins,
   });
 });
 
@@ -137,7 +161,7 @@ const PORT = process.env.PORT || 5000;
 const server = app.listen(PORT, () => {
   console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
   console.log(`Static files served from: ${path.join(__dirname, 'uploads')}`);
-  console.log(`CORS enabled for: ${process.env.FRONTEND_URL || 'http://localhost:3000'}`);
+  console.log(`CORS enabled for origins:`, allowedOrigins);
 });
 
 // Handle unhandled promise rejections
