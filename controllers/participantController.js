@@ -4,7 +4,7 @@ const { generateQRCode } = require('../utils/qrGenerator');
 const { sendQRCodeEmail } = require('../utils/mailSender');
 
 /**
- * @desc    Register participant for event (FIXED - Photo path corrected)
+ * @desc    Register participant for event (FIXED - All issues resolved)
  * @route   POST /api/participants/register
  * @access  Public
  */
@@ -23,14 +23,35 @@ exports.registerParticipant = async (req, res, next) => {
       phoneNumber,
     } = req.body;
 
-    console.log('📥 Step 3: Destructured values:', { name, email, department, matricNo, gender, eventId, phoneNumber });
+    console.log('📥 Step 3: Destructured values:', { 
+      name, email, department, matricNo, gender, eventId, phoneNumber 
+    });
+
+    // VALIDATION: Check required fields
+    if (!name || !email || !gender || !eventId || !phoneNumber) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing required fields. Name, email, gender, phone number, and event ID are required.',
+        errors: [
+          !name && 'Name is required',
+          !email && 'Email is required',
+          !gender && 'Gender is required',
+          !phoneNumber && 'Phone number is required',
+          !eventId && 'Event ID is required',
+        ].filter(Boolean),
+      });
+    }
 
     // Handle photo if uploaded - FIX: Ensure leading slash
     let photo = null;
     if (req.file) {
-      // FIX: Add leading slash to make it absolute URL
       photo = `/uploads/${req.file.filename}`;
       console.log('📥 Step 4: Photo path set to:', photo);
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Photo is required for registration',
+      });
     }
 
     // Check if event exists
@@ -104,12 +125,13 @@ exports.registerParticipant = async (req, res, next) => {
     console.log('✅ Step 11-12: Participant limit OK');
 
     // Get track from EVENT, not from participant input
+    // FIX: Handle when event.selectedTrack is null/undefined
     const participantTrack = event.selectedTrack || null;
-    console.log('🎯 Step 13: Participant track:', participantTrack);
+    console.log('🎯 Step 13: Participant track from event:', participantTrack);
 
     // TRACK RESTRICTION CHECK (only if event has a track)
     if (participantTrack) {
-      console.log('🔍 Step 14: Checking track availability for:', participantTrack);
+      console.log('🔍 Step 14: Event has track. Checking track availability for:', participantTrack);
       const trackCheck = await Participant.checkTrackAvailability(
         email.toLowerCase(),
         participantTrack,
@@ -129,38 +151,36 @@ exports.registerParticipant = async (req, res, next) => {
           },
         });
       }
+      console.log('✅ Step 14-15: Track availability OK');
+    } else {
+      console.log('✅ Step 14-15: Event has NO track. Skipping track validation.');
     }
 
-    console.log('✅ Step 14-15: Track availability OK');
+    // Prepare participant data
+    const participantData = {
+      name,
+      email: email.toLowerCase(),
+      photo,
+      gender,
+      eventId,
+      phoneNumber,
+      track: participantTrack,
+      currentActiveTrack: participantTrack || null,
+      currentActiveTrackEvent: participantTrack ? eventId : null,
+    };
+
+    // Add optional fields only if provided
+    if (department) {
+      participantData.department = department;
+    }
+    if (matricNo) {
+      participantData.matricNo = matricNo;
+    }
+
+    console.log('💾 Step 16: Creating participant with data:', participantData);
 
     // Create participant
-    console.log('💾 Step 16: Creating participant with data:', {
-      name,
-      email: email.toLowerCase(),
-      photo,
-      department,
-      matricNo,
-      gender,
-      track: participantTrack,
-      currentActiveTrack: participantTrack || null,
-      currentActiveTrackEvent: participantTrack ? eventId : null,
-      eventId,
-      phoneNumber,
-    });
-
-    const participant = await Participant.create({
-      name,
-      email: email.toLowerCase(),
-      photo,
-      department,
-      matricNo,
-      gender,
-      track: participantTrack,
-      currentActiveTrack: participantTrack || null,
-      currentActiveTrackEvent: participantTrack ? eventId : null,
-      eventId,
-      phoneNumber,
-    });
+    const participant = await Participant.create(participantData);
 
     console.log('✅ Step 17: Participant created with ID:', participant._id);
 
@@ -186,6 +206,7 @@ exports.registerParticipant = async (req, res, next) => {
       console.log('✅ Step 21: Email sent successfully');
     } catch (emailError) {
       console.error('❌ Step 21: Email sending failed:', emailError);
+      // Don't fail registration if email fails
     }
 
     console.log('🎉 Step 22: Registration complete, sending response');
@@ -200,6 +221,7 @@ exports.registerParticipant = async (req, res, next) => {
           id: participant._id,
           name: participant.name,
           email: participant.email,
+          phoneNumber: participant.phoneNumber,
           track: participant.track,
           eventId: participant.eventId,
           qrCode: participant.qrCode,
@@ -231,6 +253,14 @@ exports.registerParticipant = async (req, res, next) => {
       });
     }
     
+    // Handle duplicate key error (already registered)
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: 'You are already registered for this event',
+      });
+    }
+    
     // Handle mongoose cast errors (invalid ObjectId)
     if (error.name === 'CastError') {
       console.error('Cast error on field:', error.path);
@@ -244,8 +274,7 @@ exports.registerParticipant = async (req, res, next) => {
   }
 };
 
-// ... rest of your controller methods remain the same ...
-
+// Export other controller methods unchanged
 exports.getEventParticipants = async (req, res, next) => {
   try {
     const { eventId } = req.params;
@@ -401,6 +430,7 @@ exports.deleteParticipant = async (req, res, next) => {
     } else if (event.createdBy.toString() === userId) {
       hasPermission = true;
     } else {
+      const EventPermission = require('../models/EventPermission');
       hasPermission = await EventPermission.hasPermission(userId, event._id, 'canEdit');
     }
 
@@ -446,6 +476,7 @@ exports.checkTrackEligibility = async (req, res, next) => {
       });
     }
 
+    // FIX: Handle no track scenario
     if (!trackName) {
       return res.status(200).json({
         success: true,

@@ -21,33 +21,61 @@ const participantSchema = new mongoose.Schema({
   photo: {
     type: String,
     trim: true,
+    required: [true, 'Photo is required'],
   },
+  // OPTIONAL for non-students, REQUIRED contextually
   department: {
     type: String,
     trim: true,
     maxlength: [100, 'Department cannot exceed 100 characters'],
+    default: null,
   },
+  // OPTIONAL for non-students, can be provided by students
   matricNo: {
     type: String,
     trim: true,
     maxlength: [50, 'Matric number cannot exceed 50 characters'],
+    default: null,
   },
   gender: {
     type: String,
-    enum: ['male', 'female', 'other', 'prefer-not-to-say'],
+    required: [true, 'Gender is required'],
+    enum: {
+      values: ['male', 'female', 'other', 'prefer-not-to-say'],
+      message: 'Gender must be male, female, other, or prefer-not-to-say'
+    },
   },
+  // Phone number is now REQUIRED
+  phoneNumber: {
+    type: String,
+    required: [true, 'Phone number is required'],
+    trim: true,
+    validate: {
+      validator: function(v) {
+        // Validates Nigerian and international formats
+        // +234XXXXXXXXXX or 0XXXXXXXXXX or +XXX...
+        return /^(\+?\d{1,4}[\s-]?)?(\(?\d{3}\)?[\s-]?)?\d{3}[\s-]?\d{4,}$/.test(v);
+      },
+      message: 'Please provide a valid phone number'
+    }
+  },
+  // Track is OPTIONAL - only exists if event has a track
   track: {
     type: String,
     trim: true,
-    enum: ['Web and App', 'Networking', 'Cloud Computing', 'PCB', null],
+    enum: {
+      values: ['Web and App', 'Networking', 'Cloud Computing', 'PCB', null],
+      message: 'Invalid track selection'
+    },
+    default: null,
   },
-  // NEW: Track the current active track this participant is enrolled in
+  // Track the current active track this participant is enrolled in
   currentActiveTrack: {
     type: String,
     enum: ['Web and App', 'Networking', 'Cloud Computing', 'PCB', null],
     default: null,
   },
-  // NEW: Store the active event ID for track restriction
+  // Store the active event ID for track restriction
   currentActiveTrackEvent: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Event',
@@ -64,10 +92,6 @@ const participantSchema = new mongoose.Schema({
   registeredAt: {
     type: Date,
     default: Date.now,
-  },
-  phoneNumber: {
-    type: String,
-    trim: true,
   },
   isActive: {
     type: Boolean,
@@ -95,7 +119,7 @@ participantSchema.virtual('attendanceRecords', {
 
 // Method to check if participant can register for a track
 participantSchema.methods.canRegisterForTrack = function(newTrack, newEventId) {
-  // If no track restriction, allow registration
+  // If no track restriction (event has no track), allow registration
   if (!newTrack) return true;
   
   // If participant has no active track, allow registration
@@ -117,6 +141,11 @@ participantSchema.methods.canRegisterForTrack = function(newTrack, newEventId) {
 
 // Static method to check track availability for email
 participantSchema.statics.checkTrackAvailability = async function(email, trackName, eventId) {
+  // If no track name provided, no restriction applies
+  if (!trackName) {
+    return { available: true };
+  }
+
   // Find any active participant with this email in a track-based event
   const existingParticipant = await this.findOne({
     email: email.toLowerCase(),
