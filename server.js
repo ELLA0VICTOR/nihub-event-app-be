@@ -15,8 +15,12 @@ dotenv.config();
 // Initialize express app
 const app = express();
 
+// ===== FIX FOR 304 NOT MODIFIED =====
+app.disable('etag'); // This line disables caching
+
 // Connect to MongoDB
 connectDB();
+// ... (rest of your file is exactly the same) ...
 
 // Start cron jobs
 scheduleEventTermination();
@@ -46,7 +50,7 @@ const corsOptions = {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning'], // ADDED ngrok header
   exposedHeaders: ['Content-Length', 'Content-Type'],
   maxAge: 86400 // 24 hours
 };
