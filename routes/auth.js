@@ -8,6 +8,8 @@ const {
   getMe,
   updatePassword,
   logout,
+  forgotPassword,
+  resetPassword,
 } = require('../controllers/authController');
 const { protect } = require('../middleware/authMiddleware');
 const { validate } = require('../middleware/validateRequest');
@@ -66,6 +68,34 @@ const loginValidation = [
   body('Password').optional(), // Support capitalized
 ];
 
+// Validation rules for password reset
+const forgotPasswordValidation = [
+  body('email')
+    .trim()
+    .notEmpty()
+    .withMessage('Email is required')
+    .isEmail()
+    .withMessage('Please provide a valid email')
+    .normalizeEmail(),
+];
+
+const resetPasswordValidation = [
+  body('token')
+    .notEmpty()
+    .withMessage('Reset token is required'),
+  body('email')
+    .trim()
+    .notEmpty()
+    .withMessage('Email is required')
+    .isEmail()
+    .withMessage('Please provide a valid email')
+    .normalizeEmail(),
+  body('newPassword')
+    .notEmpty()
+    .withMessage('New password is required')
+    .isLength({ min: 6 })
+    .withMessage('Password must be at least 6 characters'),
+];
 const updatePasswordValidation = [
   body('currentPassword')
     .notEmpty()
@@ -83,6 +113,8 @@ router.post('/verify-email', verifyEmailValidation, validate, verifyEmail);
 router.post('/resend-verification', resendVerificationValidation, validate, resendVerification);
 router.post('/login', loginValidation, validate, login);
 router.get('/me', protect, getMe);
+router.post('/forgot-password', forgotPasswordValidation, validate, forgotPassword);
+router.post('/reset-password', resetPasswordValidation, validate, resetPassword);
 router.put('/update-password', protect, updatePasswordValidation, validate, updatePassword);
 router.post('/logout', protect, logout);
 

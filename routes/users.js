@@ -6,7 +6,9 @@ const {
   createAdmin,
   updateUser,
   deleteUser,
+  
 } = require('../controllers/userController');
+const { resetAdminPassword } = require('../controllers/authController')
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { validate, validateObjectId } = require('../middleware/validateRequest');
 
@@ -58,6 +60,21 @@ const updateUserValidation = [
 
 // All routes require superadmin access
 router.use(protect, authorize('superadmin'));
+
+// Reset admin password route
+router.put(
+  '/:id/reset-password',
+  protect,
+  authorize('superadmin'),
+  validateObjectId(),
+  body('newPassword')
+    .notEmpty()
+    .withMessage('New password is required')
+    .isLength({ min: 6 })
+    .withMessage('Password must be at least 6 characters'),
+  validate,
+  resetAdminPassword
+);
 
 // Routes
 router.route('/')

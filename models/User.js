@@ -24,7 +24,7 @@ const userSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Password is required'],
     minlength: [6, 'Password must be at least 6 characters'],
-    select: false, // Don't return password by default
+    select: false,
   },
   role: {
     type: String,
@@ -41,9 +41,18 @@ const userSchema = new mongoose.Schema({
   },
   emailVerificationToken: {
     type: String,
-    select: false, // Don't return token by default
+    select: false,
   },
   emailVerificationExpires: {
+    type: Date,
+    select: false,
+  },
+  // NEW: Password Reset Fields
+  passwordResetToken: {
+    type: String,
+    select: false,
+  },
+  passwordResetExpires: {
     type: Date,
     select: false,
   },
@@ -81,6 +90,8 @@ userSchema.methods.toJSON = function () {
   delete obj.password;
   delete obj.emailVerificationToken;
   delete obj.emailVerificationExpires;
+  delete obj.passwordResetToken;
+  delete obj.passwordResetExpires;
   return obj;
 };
 
