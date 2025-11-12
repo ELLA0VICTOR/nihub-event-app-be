@@ -111,15 +111,7 @@ router.post(
   markPresent
 );
 
-// Direct scan (kept for backward compatibility)
-router.post(
-  '/scan',
-  protect,
-  authorize('admin', 'superadmin'),
-  scanValidation,
-  validate,
-  scanQRCode
-);
+
 
 router.get(
   '/event/:eventId',

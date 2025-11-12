@@ -1050,7 +1050,6 @@ exports.markAllPresent = async (req, res, next) => {
       });
     }
 
-    // FIXED: Check for TODAY's attendance only
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -1071,18 +1070,21 @@ exports.markAllPresent = async (req, res, next) => {
       });
     }
 
-    // Create attendance records with special marker for bulk action
     const attendanceRecords = participantsToMark.map(participant => ({
       participantId: participant._id,
       eventId,
       scannedBy: req.user.id,
       status: 'present',
-      notes: 'BULK_MARKED_PRESENT', // Special marker for revocation
+      notes: 'BULK_MARKED_PRESENT',
       attendanceDate: today,
       scannedAt: new Date(),
     }));
 
-    const insertedRecords = await Attendance.insertMany(attendanceRecords);
+    await Attendance.insertMany(attendanceRecords);
+
+    // Return updated counts
+    const totalPresent = existingAttendanceIds.length + participantsToMark.length;
+    const totalAbsent = participants.length - totalPresent;
 
     res.status(201).json({
       success: true,
@@ -1091,8 +1093,12 @@ exports.markAllPresent = async (req, res, next) => {
         totalMarked: participantsToMark.length,
         totalParticipants: participants.length,
         alreadyMarked: existingAttendanceIds.length,
-        bulkActionId: insertedRecords[0]._id, // For potential revocation reference
         date: today.toISOString().split('T')[0],
+        updatedStats: {
+          totalRegistered: participants.length,
+          present: totalPresent,
+          absent: totalAbsent,
+        }
       },
     });
   } catch (error) {
