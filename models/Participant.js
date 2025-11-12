@@ -18,11 +18,18 @@ const participantSchema = new mongoose.Schema({
       'Please provide a valid email',
     ],
   },
+  
+  // ===== MODIFIED FIELD =====
+  // Corrected the syntax for a required embedded object
   photo: {
-    type: String,
-    trim: true,
+    type: {
+      data: Buffer,
+      contentType: String,
+    },
     required: [true, 'Photo is required'],
   },
+  // ==========================
+
   // OPTIONAL for non-students, REQUIRED contextually
   department: {
     type: String,
@@ -162,7 +169,7 @@ participantSchema.statics.checkTrackAvailability = async function(email, trackNa
       trackEvent.status !== 'completed' && trackEvent.status !== 'terminated') {
     return {
       available: false,
-      currentTrack: existingParticipant.currentActiveTrack,
+      currentTrack: existingParticipant.currentTrack,
       currentEvent: existingParticipant.currentActiveTrackEvent,
     };
   }

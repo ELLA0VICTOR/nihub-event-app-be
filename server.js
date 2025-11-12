@@ -61,6 +61,7 @@ app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
 // ===== Security middleware (MODIFIED for images) =====
+// THIS IS ALREADY CORRECT for Base64 images ("data:")
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" }, // Allow images from different origin
   contentSecurityPolicy: {
@@ -74,7 +75,9 @@ app.use(helmet({
 }));
 
 // ===== STATIC FILES - Must be early in middleware chain =====
-// Serve uploads with proper headers
+// This is no longer needed for new uploads, as they are stored in the DB.
+// You can keep it if you have old images in your DB still pointing here.
+/*
 app.use('/uploads', (req, res, next) => {
   const origin = req.headers.origin;
   
@@ -90,6 +93,7 @@ app.use('/uploads', (req, res, next) => {
   res.header('Cross-Origin-Resource-Policy', 'cross-origin');
   next();
 }, express.static(path.join(__dirname, 'uploads')));
+*/
 
 // Rate limiting (AFTER static files to not rate-limit images)
 const limiter = rateLimit({
@@ -98,12 +102,14 @@ const limiter = rateLimit({
   message: 'Too many requests from this IP, please try again later.',
   standardHeaders: true,
   legacyHeaders: false,
-  skip: (req) => req.path.startsWith('/uploads'), // Don't rate limit image requests
+  // This skip is no longer necessary if you remove the /uploads route
+  skip: (req) => req.path.startsWith('/uploads'), 
 });
 
 app.use('/api/', limiter);
 
 // Body parser middleware
+// The 10mb limit is good, but file uploads are controlled by Multer's limit
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -164,7 +170,8 @@ const PORT = process.env.PORT || 5000;
 
 const server = app.listen(PORT, () => {
   console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
-  console.log(`Static files served from: ${path.join(__dirname, 'uploads')}`);
+  // We can comment this out too since we aren't serving static files anymore
+  // console.log(`Static files served from: ${path.join(__dirname, 'uploads')}`);
   console.log(`CORS enabled for origins:`, allowedOrigins);
 });
 

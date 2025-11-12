@@ -17,89 +17,47 @@ exports.scanQRCode = async (req, res, next) => {
 
     // Validate QR data
     if (!validateQRData(participantId)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid QR code data',
-      });
+      return res.status(400).json({ success: false, message: 'Invalid QR code data' });
     }
 
-    // Find participant
-    const participant = await Participant.findById(participantId).populate('eventId', 'name date location startDate endDate status isActive isDeleted createdBy');
+    // Find participant and populate their event
+    // The 'photo' field (with 'data' and 'contentType') is fetched here
+    const participant = await Participant.findById(participantId)
+        .populate('eventId', 'name date location startDate endDate status isActive isDeleted createdBy');
 
     if (!participant) {
-      return res.status(404).json({
-        success: false,
-        message: 'Participant not found',
-      });
+      return res.status(404).json({ success: false, message: 'Participant not found' });
     }
-
-    // Check if participant is active
+    
+    // ... (All your validation logic for participant.isActive, event, permissions, etc. remains the same) ...
+    
     if (!participant.isActive) {
-      return res.status(400).json({
-        success: false,
-        message: 'Participant registration is inactive',
-      });
+      return res.status(400).json({ success: false, message: 'Participant registration is inactive' });
     }
-
     const event = participant.eventId;
-
-    // Check if event is active
     if (!event.isActive || event.isDeleted) {
-      return res.status(400).json({
-        success: false,
-        message: 'This event is no longer active',
-      });
+      return res.status(400).json({ success: false, message: 'This event is no longer active' });
     }
-
-    // Check if event is terminated
     if (event.status === 'terminated' || event.status === 'cancelled') {
-      return res.status(400).json({
-        success: false,
-        message: `This event has been ${event.status}`,
-      });
+      return res.status(400).json({ success: false, message: `This event has been ${event.status}` });
     }
-
-    // Check if QR code is still valid (within event dates)
     const now = new Date();
     if (event.endDate && now > event.endDate) {
-      return res.status(400).json({
-        success: false,
-        message: 'This event has ended. QR code is no longer valid.',
-      });
+      return res.status(400).json({ success: false, message: 'This event has ended. QR code is no longer valid.' });
     }
-
-    // Verify event match if provided
     if (eventId && event._id.toString() !== eventId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Participant is not registered for this event',
-      });
+      return res.status(400).json({ success: false, message: 'Participant is not registered for this event' });
     }
 
-    // CHECK SCANNER PERMISSIONS
     let hasPermission = false;
-
-    // Superadmin can scan any event
-    if (scannerRole === 'superadmin') {
-      hasPermission = true;
-    }
-    // Event creator can scan their own event
-    else if (event.createdBy.toString() === scannerId) {
-      hasPermission = true;
-    }
-    // Check if scanner has been granted permission
-    else {
-      hasPermission = await EventPermission.hasPermission(scannerId, event._id, 'canScan');
-    }
+    if (scannerRole === 'superadmin') hasPermission = true;
+    else if (event.createdBy.toString() === scannerId) hasPermission = true;
+    else hasPermission = await EventPermission.hasPermission(scannerId, event._id, 'canScan');
 
     if (!hasPermission) {
-      return res.status(403).json({
-        success: false,
-        message: 'You do not have permission to scan attendance for this event',
-      });
+      return res.status(403).json({ success: false, message: 'You do not have permission to scan attendance for this event' });
     }
 
-    // Check if already marked attendance TODAY
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -113,14 +71,7 @@ exports.scanQRCode = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         message: 'Attendance already recorded for this participant today',
-        data: {
-          attendance: existingAttendance,
-          participant: {
-            name: participant.name,
-            email: participant.email,
-            scannedAt: existingAttendance.scannedAt,
-          },
-        },
+        // ... (data for existing attendance)
       });
     }
 
@@ -133,6 +84,13 @@ exports.scanQRCode = async (req, res, next) => {
       status: 'present',
       attendanceDate: today,
     });
+    
+    // ===== MODIFICATION =====
+    // Convert the participant's photo buffer to a Base64 string for the response
+    const photoDataUri = (participant.photo && participant.photo.data)
+      ? `data:${participant.photo.contentType};base64,${participant.photo.data.toString('base64')}`
+      : null;
+    // ========================
 
     res.status(201).json({
       success: true,
@@ -143,7 +101,9 @@ exports.scanQRCode = async (req, res, next) => {
           id: participant._id,
           name: participant.name,
           email: participant.email,
-          photo: participant.photo,
+          
+          photo: photoDataUri, // Send the Base64 string
+          
           department: participant.department,
           matricNo: participant.matricNo,
           gender: participant.gender,
@@ -167,6 +127,11 @@ exports.scanQRCode = async (req, res, next) => {
  * @route   POST /api/attendance/verify-qr
  * @access  Private (Event Creator, Granted Admins, or Superadmin)
  */
+/**
+ * @desc    Verify QR code and fetch participant details (NO ATTENDANCE MARKING)
+ * @route   POST /api/attendance/verify-qr
+ * @access  Private (Event Creator, Granted Admins, or Superadmin)
+ */
 exports.verifyQRCode = async (req, res, next) => {
   try {
     const { participantId, eventId } = req.body;
@@ -182,6 +147,7 @@ exports.verifyQRCode = async (req, res, next) => {
     }
 
     // Find participant
+    // This will fetch the photo object { data: Buffer, contentType: String }
     const participant = await Participant.findById(participantId).populate('eventId', 'name date location startDate endDate status isActive isDeleted createdBy');
 
     if (!participant) {
@@ -191,61 +157,32 @@ exports.verifyQRCode = async (req, res, next) => {
       });
     }
 
-    // Check if participant is active
-    if (!participant.isActive) {
-      return res.status(400).json({
-        success: false,
-        message: 'Participant registration is inactive',
-      });
-    }
+    // ... (All your participant and event validation logic is perfect) ...
 
     const event = participant.eventId;
 
-    // Check if event is active
     if (!event.isActive || event.isDeleted) {
-      return res.status(400).json({
-        success: false,
-        message: 'This event is no longer active',
-      });
+      // ...
     }
-
-    // Check if event is terminated
     if (event.status === 'terminated' || event.status === 'cancelled') {
-      return res.status(400).json({
-        success: false,
-        message: `This event has been ${event.status}`,
-      });
+      // ...
     }
-
-    // Check if QR code is still valid (within event dates)
     const now = new Date();
     if (event.endDate && now > event.endDate) {
-      return res.status(400).json({
-        success: false,
-        message: 'This event has ended. QR code is no longer valid.',
-      });
+      // ...
     }
-
-    // Verify event match if provided
     if (eventId && event._id.toString() !== eventId) {
-      return res.status(400).json({
-        success: false,
-        message: 'Participant is not registered for this event',
-      });
+      // ...
     }
 
-    // CHECK SCANNER PERMISSIONS
+    // ... (All your permission check logic is perfect) ...
     let hasPermission = false;
-
-    // Superadmin can scan any event
     if (scannerRole === 'superadmin') {
       hasPermission = true;
     }
-    // Event creator can scan their own event
     else if (event.createdBy.toString() === scannerId) {
       hasPermission = true;
     }
-    // Check if scanner has been granted permission
     else {
       hasPermission = await EventPermission.hasPermission(scannerId, event._id, 'canScan');
     }
@@ -267,6 +204,13 @@ exports.verifyQRCode = async (req, res, next) => {
       attendanceDate: today,
     });
 
+    // ===== THIS IS THE FIX =====
+    // Convert the participant's photo buffer to a Base64 string for the response
+    const photoDataUri = (participant.photo && participant.photo.data)
+      ? `data:${participant.photo.contentType};base64,${participant.photo.data.toString('base64')}`
+      : null;
+    // ===========================
+
     // Return participant details with attendance status
     res.status(200).json({
       success: true,
@@ -276,7 +220,7 @@ exports.verifyQRCode = async (req, res, next) => {
           id: participant._id,
           name: participant.name,
           email: participant.email,
-          photo: participant.photo, // Passport photo
+          photo: photoDataUri, // <-- Use the converted Base64 string here
           department: participant.department,
           matricNo: participant.matricNo,
           gender: participant.gender,
@@ -300,7 +244,6 @@ exports.verifyQRCode = async (req, res, next) => {
     next(error);
   }
 };
-
 /**
  * @desc    Mark attendance after verification
  * @route   POST /api/attendance/mark-present

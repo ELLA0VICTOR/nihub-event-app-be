@@ -21,16 +21,15 @@ exports.createEvent = async (req, res, next) => {
       location,
       maxParticipants,
       status,
-      imageUrl,
       selectedTrack,
       tracks,
     } = req.body;
 
-    // Handle uploaded image file
-    let finalImageUrl = imageUrl;
+    // Create the eventImage object from req.file
+    let eventImage = {};
     if (req.file) {
-      // If file was uploaded, use the file path
-      finalImageUrl = `/uploads/${req.file.filename}`;
+      eventImage.data = req.file.buffer;
+      eventImage.contentType = req.file.mimetype;
     }
 
     // Calculate dates if not provided
@@ -43,7 +42,6 @@ exports.createEvent = async (req, res, next) => {
       calculatedEndDate = end;
     }
 
-    // Ensure we have a date value
     if (!calculatedStartDate) {
       return res.status(400).json({
         success: false,
@@ -62,7 +60,10 @@ exports.createEvent = async (req, res, next) => {
       location,
       maxParticipants: maxParticipants ? parseInt(maxParticipants) : undefined,
       status: status || 'upcoming',
-      imageUrl: finalImageUrl,
+      
+      // Use the new eventImage object
+      eventImage: eventImage.data ? eventImage : undefined, 
+
       selectedTrack: selectedTrack || null,
       tracks: tracks ? (typeof tracks === 'string' ? JSON.parse(tracks) : tracks) : [],
       createdBy: req.user.id,
@@ -70,23 +71,20 @@ exports.createEvent = async (req, res, next) => {
 
     const populatedEvent = await Event.findById(event._id).populate('createdBy', 'name email');
 
+    // Convert image to Base64 for the response
+    let eventData = populatedEvent.toObject();
+    if (eventData.eventImage && eventData.eventImage.data) {
+      eventData.eventImage = `data:${eventData.eventImage.contentType};base64,${eventData.eventImage.data.toString('base64')}`;
+    }
+
     res.status(201).json({
       success: true,
       message: 'Event created successfully',
       data: {
-        event: populatedEvent,
+        event: eventData, // Send the converted data
       },
     });
   } catch (error) {
-    // Clean up uploaded file if event creation fails
-    if (req.file) {
-      const fs = require('fs');
-      const path = require('path');
-      const filePath = path.join(__dirname, '..', 'uploads', req.file.filename);
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-      }
-    }
     next(error);
   }
 };
@@ -115,7 +113,8 @@ exports.getAllEvents = async (req, res, next) => {
     // Pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    const events = await Event.find(query)
+    // 1. We removed .select('-eventImage.data') to get the image data
+    const eventsDocs = await Event.find(query)
       .populate('createdBy', 'name email')
       .sort(sortBy)
       .limit(parseInt(limit))
@@ -126,6 +125,15 @@ exports.getAllEvents = async (req, res, next) => {
     // Auto-terminate expired events
     await Event.terminateExpiredEvents();
 
+    // 2. Manually convert all event images to Base64
+    const events = eventsDocs.map(event => {
+      let eventData = event.toObject();
+      if (eventData.eventImage && eventData.eventImage.data) {
+        eventData.eventImage = `data:${eventData.eventImage.contentType};base64,${eventData.eventImage.data.toString('base64')}`;
+      }
+      return eventData;
+    });
+
     res.status(200).json({
       success: true,
       count: events.length,
@@ -133,7 +141,7 @@ exports.getAllEvents = async (req, res, next) => {
       page: parseInt(page),
       pages: Math.ceil(total / parseInt(limit)),
       data: {
-        events,
+        events, // 3. Send the converted events
       },
     });
   } catch (error) {
@@ -167,11 +175,19 @@ exports.getEvent = async (req, res, next) => {
       await event.save();
     }
 
+    // ===== MODIFICATION =====
+    // Convert image buffer to Base64 string for the response
+    let eventData = event.toObject();
+    if (event.eventImage && event.eventImage.data) {
+      eventData.eventImage = `data:${event.eventImage.contentType};base64,${event.eventImage.data.toString('base64')}`;
+    }
+    // ========================
+
     res.status(200).json({
       success: true,
       data: {
         event: {
-          ...event.toObject(),
+          ...eventData, // Send the modified event data
           participantCount,
           attendanceCount,
         },
@@ -189,23 +205,6 @@ exports.getEvent = async (req, res, next) => {
  */
 exports.updateEvent = async (req, res, next) => {
   try {
-    const {
-      name,
-      description,
-      date,
-      startDate,
-      endDate,
-      duration,
-      autoTerminate,
-      location,
-      maxParticipants,
-      status,
-      isActive,
-      imageUrl,
-      selectedTrack,
-      tracks,
-    } = req.body;
-
     let event = await Event.findById(req.params.id);
 
     if (!event) {
@@ -226,61 +225,59 @@ exports.updateEvent = async (req, res, next) => {
       });
     }
 
-    // Handle uploaded image file
-    let finalImageUrl = imageUrl || event.imageUrl;
+    // ===== MODIFICATION =====
+    // Get all fields from req.body to update
+    const fieldsToUpdate = { ...req.body };
+
+    // Handle new image upload
     if (req.file) {
-      // If new file was uploaded, use the new file path
-      finalImageUrl = `/uploads/${req.file.filename}`;
-      
-      // Optionally delete old image file
-      if (event.imageUrl && event.imageUrl.startsWith('/uploads/')) {
-        const fs = require('fs');
-        const path = require('path');
-        const oldFilePath = path.join(__dirname, '..', event.imageUrl);
-        if (fs.existsSync(oldFilePath)) {
-          fs.unlinkSync(oldFilePath);
-        }
-      }
+      fieldsToUpdate.eventImage = {
+        data: req.file.buffer,
+        contentType: req.file.mimetype
+      };
     }
 
+    // Remove the old, unused 'imageUrl' field if it exists
+    delete fieldsToUpdate.imageUrl; 
+    // ========================
+
     // Calculate new dates if duration changed
-    let calculatedEndDate = endDate;
-    if (duration && !endDate) {
-      const start = startDate || event.startDate;
+    let calculatedEndDate = fieldsToUpdate.endDate;
+    if (fieldsToUpdate.duration && !fieldsToUpdate.endDate) {
+      const start = fieldsToUpdate.startDate || event.startDate;
       const end = new Date(start);
-      end.setDate(end.getDate() + parseInt(duration));
+      end.setDate(end.getDate() + parseInt(fieldsToUpdate.duration));
       calculatedEndDate = end;
+    }
+    fieldsToUpdate.endDate = calculatedEndDate || event.endDate;
+    
+    // Ensure 'date' and 'startDate' are consistent
+    if (fieldsToUpdate.startDate) {
+        fieldsToUpdate.date = fieldsToUpdate.startDate;
+    } else if (fieldsToUpdate.date) {
+        fieldsToUpdate.startDate = fieldsToUpdate.date;
     }
 
     event = await Event.findByIdAndUpdate(
       req.params.id,
-      {
-        name: name || event.name,
-        description: description !== undefined ? description : event.description,
-        date: startDate || date || event.date,
-        startDate: startDate || date || event.startDate,
-        endDate: calculatedEndDate !== undefined ? calculatedEndDate : event.endDate,
-        duration: duration ? parseInt(duration) : event.duration,
-        autoTerminate: autoTerminate !== undefined ? autoTerminate : event.autoTerminate,
-        location: location || event.location,
-        maxParticipants: maxParticipants ? parseInt(maxParticipants) : event.maxParticipants,
-        status: status || event.status,
-        isActive: isActive !== undefined ? isActive : event.isActive,
-        imageUrl: finalImageUrl,
-        selectedTrack: selectedTrack !== undefined ? selectedTrack : event.selectedTrack,
-        tracks: tracks ? (typeof tracks === 'string' ? JSON.parse(tracks) : tracks) : event.tracks,
-      },
+      fieldsToUpdate, // Pass the updated fields object
       {
         new: true,
         runValidators: true,
       }
     ).populate('createdBy', 'name email');
 
+    // Convert image to Base64 for the response
+    let eventData = event.toObject();
+    if (eventData.eventImage && eventData.eventImage.data) {
+      eventData.eventImage = `data:${eventData.eventImage.contentType};base64,${eventData.eventImage.data.toString('base64')}`;
+    }
+
     res.status(200).json({
       success: true,
       message: 'Event updated successfully',
       data: {
-        event,
+        event: eventData,
       },
     });
   } catch (error) {
@@ -481,6 +478,7 @@ exports.getMyEvents = async (req, res, next) => {
 
     const events = await Event.find(query)
       .populate('createdBy', 'name email')
+      .select('-eventImage.data') // Exclude large image data for fast list loading
       .sort('-createdAt')
       .limit(parseInt(limit))
       .skip(skip);

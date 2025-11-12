@@ -1,5 +1,6 @@
 const express = require('express');
 const { body } = require('express-validator');
+const multer = require('multer'); // <--- 1. IMPORTED MULTER
 const { checkTrackEligibility } = require('../controllers/participantController');
 const {
   registerParticipant,
@@ -12,9 +13,20 @@ const {
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { validate, validateObjectId } = require('../middleware/validateRequest');
 const { mapParticipantFields } = require('../middleware/fieldMapper');
-const upload = require('../utils/fileUpload');
+// const upload = require('../utils/fileUpload'); // <--- 2. REMOVED OLD UPLOAD
 
 const router = express.Router();
+
+// --- 3. ADDED MULTER MEMORY STORAGE CONFIG ---
+// Configure multer for memory storage (stores file in req.file.buffer)
+const storage = multer.memoryStorage();
+
+// Set file size limit (e.g., 10MB)
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 10 * 1024 * 1024 } 
+});
+// ---------------------------------------------
 
 // Validation rules for participant registration
 const participantRegistrationValidation = [
@@ -91,7 +103,7 @@ const participantRegistrationValidation = [
 // Routes
 router.post(
   '/register',
-  upload.single('photo'),  // Handle file upload
+  upload.single('photo'),  // This now uses the in-memory 'upload'
   mapParticipantFields,    // Map field names (fullname -> name, matricnumber -> matricNo)
   participantRegistrationValidation,
   validate,

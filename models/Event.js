@@ -70,10 +70,16 @@ const eventSchema = new mongoose.Schema({
   deletedAt: {
     type: Date,
   },
-  imageUrl: {
-    type: String,
-    trim: true,
+  
+  // ===== MODIFIED FIELD =====
+  // Replaced 'imageUrl' with this object to store binary image data
+  eventImage: {
+    data: Buffer,
+    contentType: String
+    // 'required: false' was removed here to fix the crash
   },
+  // ==========================
+
   // Track selection from predefined options
   selectedTrack: {
     type: String,
