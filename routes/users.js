@@ -8,7 +8,7 @@ const {
   deleteUser,
   
 } = require('../controllers/userController');
-const { resetAdminPassword } = require('../controllers/authController')
+const { resetAdminPassword } = require('../controllers/authController') // This controller is for the superadmin, not the public link
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { validate, validateObjectId } = require('../middleware/validateRequest');
 
@@ -62,6 +62,8 @@ const updateUserValidation = [
 router.use(protect, authorize('superadmin'));
 
 // Reset admin password route
+// This route is for a Superadmin to reset ANOTHER admin's password.
+// This is correct. "PUT" is correct. No changes needed.
 router.put(
   '/:id/reset-password',
   protect,
