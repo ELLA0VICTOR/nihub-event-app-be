@@ -1,0 +1,91 @@
+const express = require('express');
+const { body } = require('express-validator');
+const {
+  getAllUsers,
+  getUser,
+  createAdmin,
+  updateUser,
+  deleteUser,
+  
+} = require('../controllers/userController');
+const { resetAdminPassword } = require('../controllers/authController') // This controller is for the superadmin, not the public link
+const { protect, authorize } = require('../middleware/authMiddleware');
+const { validate, validateObjectId } = require('../middleware/validateRequest');
+
+const router = express.Router();
+
+// Validation rules
+const createAdminValidation = [
+  body('name')
+    .trim()
+    .notEmpty()
+    .withMessage('Name is required')
+    .isLength({ min: 2, max: 100 })
+    .withMessage('Name must be between 2 and 100 characters'),
+  body('email')
+    .trim()
+    .notEmpty()
+    .withMessage('Email is required')
+    .isEmail()
+    .withMessage('Please provide a valid email')
+    .normalizeEmail(),
+  body('password')
+    .notEmpty()
+    .withMessage('Password is required')
+    .isLength({ min: 6 })
+    .withMessage('Password must be at least 6 characters'),
+  body('role')
+    .optional()
+    .isIn(['admin', 'superadmin'])
+    .withMessage('Role must be either admin or superadmin'),
+];
+
+const updateUserValidation = [
+  body('name')
+    .optional()
+    .trim()
+    .isLength({ min: 2, max: 100 })
+    .withMessage('Name must be between 2 and 100 characters'),
+  body('email')
+    .optional()
+    .trim()
+    .isEmail()
+    .withMessage('Please provide a valid email')
+    .normalizeEmail(),
+  body('role')
+    .optional()
+    .isIn(['admin', 'superadmin'])
+    .withMessage('Role must be either admin or superadmin'),
+];
+
+// All routes require superadmin access
+router.use(protect, authorize('superadmin'));
+
+// Reset admin password route
+// This route is for a Superadmin to reset ANOTHER admin's password.
+// This is correct. "PUT" is correct. No changes needed.
+router.put(
+  '/:id/reset-password',
+  protect,
+  authorize('superadmin'),
+  validateObjectId(),
+  body('newPassword')
+    .notEmpty()
+    .withMessage('New password is required')
+    .isLength({ min: 6 })
+    .withMessage('Password must be at least 6 characters'),
+  validate,
+  resetAdminPassword
+);
+
+// Routes
+router.route('/')
+  .get(getAllUsers)
+  .post(createAdminValidation, validate, createAdmin);
+
+router.route('/:id')
+  .get(validateObjectId(), getUser)
+  .put(validateObjectId(), updateUserValidation, validate, updateUser)
+  .delete(validateObjectId(), deleteUser);
+
+module.exports = router;
