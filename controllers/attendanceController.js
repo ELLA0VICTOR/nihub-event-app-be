@@ -21,15 +21,12 @@ exports.scanQRCode = async (req, res, next) => {
     }
 
     // Find participant and populate their event
-    // The 'photo' field (with 'data' and 'contentType') is fetched here
     const participant = await Participant.findById(participantId)
         .populate('eventId', 'name date location startDate endDate status isActive isDeleted createdBy');
 
     if (!participant) {
       return res.status(404).json({ success: false, message: 'Participant not found' });
     }
-    
-    // ... (All your validation logic for participant.isActive, event, permissions, etc. remains the same) ...
     
     if (!participant.isActive) {
       return res.status(400).json({ success: false, message: 'Participant registration is inactive' });
@@ -71,7 +68,14 @@ exports.scanQRCode = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         message: 'Attendance already recorded for this participant today',
-        // ... (data for existing attendance)
+        data: {
+          attendance: existingAttendance,
+          participant: {
+            name: participant.name,
+            email: participant.email,
+            scannedAt: existingAttendance.scannedAt,
+          },
+        },
       });
     }
 
@@ -85,12 +89,10 @@ exports.scanQRCode = async (req, res, next) => {
       attendanceDate: today,
     });
     
-    // ===== MODIFICATION =====
     // Convert the participant's photo buffer to a Base64 string for the response
     const photoDataUri = (participant.photo && participant.photo.data)
       ? `data:${participant.photo.contentType};base64,${participant.photo.data.toString('base64')}`
       : null;
-    // ========================
 
     res.status(201).json({
       success: true,
@@ -101,9 +103,7 @@ exports.scanQRCode = async (req, res, next) => {
           id: participant._id,
           name: participant.name,
           email: participant.email,
-          
-          photo: photoDataUri, // Send the Base64 string
-          
+          photo: photoDataUri,
           department: participant.department,
           matricNo: participant.matricNo,
           gender: participant.gender,
@@ -127,11 +127,6 @@ exports.scanQRCode = async (req, res, next) => {
  * @route   POST /api/attendance/verify-qr
  * @access  Private (Event Creator, Granted Admins, or Superadmin)
  */
-/**
- * @desc    Verify QR code and fetch participant details (NO ATTENDANCE MARKING)
- * @route   POST /api/attendance/verify-qr
- * @access  Private (Event Creator, Granted Admins, or Superadmin)
- */
 exports.verifyQRCode = async (req, res, next) => {
   try {
     const { participantId, eventId } = req.body;
@@ -146,9 +141,9 @@ exports.verifyQRCode = async (req, res, next) => {
       });
     }
 
-    // Find participant
-    // This will fetch the photo object { data: Buffer, contentType: String }
-    const participant = await Participant.findById(participantId).populate('eventId', 'name date location startDate endDate status isActive isDeleted createdBy');
+    // Find participant and populate their event
+    const participant = await Participant.findById(participantId)
+      .populate('eventId', 'name date location startDate endDate status isActive isDeleted createdBy');
 
     if (!participant) {
       return res.status(404).json({
@@ -157,33 +152,53 @@ exports.verifyQRCode = async (req, res, next) => {
       });
     }
 
-    // ... (All your participant and event validation logic is perfect) ...
+    // ===== CRITICAL: Check if participant is active =====
+    if (!participant.isActive) {
+      return res.status(400).json({
+        success: false,
+        message: 'Participant registration is inactive',
+      });
+    }
 
     const event = participant.eventId;
 
+    // ===== CRITICAL: Validate event status =====
     if (!event.isActive || event.isDeleted) {
-      // ...
+      return res.status(400).json({
+        success: false,
+        message: 'This event is no longer active',
+      });
     }
+    
     if (event.status === 'terminated' || event.status === 'cancelled') {
-      // ...
+      return res.status(400).json({
+        success: false,
+        message: `This event has been ${event.status}`,
+      });
     }
+    
     const now = new Date();
     if (event.endDate && now > event.endDate) {
-      // ...
+      return res.status(400).json({
+        success: false,
+        message: 'This event has ended. QR code is no longer valid.',
+      });
     }
+    
     if (eventId && event._id.toString() !== eventId) {
-      // ...
+      return res.status(400).json({
+        success: false,
+        message: 'Participant is not registered for this event',
+      });
     }
 
-    // ... (All your permission check logic is perfect) ...
+    // ===== CRITICAL: Check scanner permissions =====
     let hasPermission = false;
     if (scannerRole === 'superadmin') {
       hasPermission = true;
-    }
-    else if (event.createdBy.toString() === scannerId) {
+    } else if (event.createdBy.toString() === scannerId) {
       hasPermission = true;
-    }
-    else {
+    } else {
       hasPermission = await EventPermission.hasPermission(scannerId, event._id, 'canScan');
     }
 
@@ -204,14 +219,11 @@ exports.verifyQRCode = async (req, res, next) => {
       attendanceDate: today,
     });
 
-    // ===== THIS IS THE FIX =====
-    // Convert the participant's photo buffer to a Base64 string for the response
+    // Convert photo buffer to Base64 data URI
     const photoDataUri = (participant.photo && participant.photo.data)
       ? `data:${participant.photo.contentType};base64,${participant.photo.data.toString('base64')}`
       : null;
-    // ===========================
 
-    // Return participant details with attendance status
     res.status(200).json({
       success: true,
       message: 'QR code verified successfully',
@@ -220,7 +232,7 @@ exports.verifyQRCode = async (req, res, next) => {
           id: participant._id,
           name: participant.name,
           email: participant.email,
-          photo: photoDataUri, // <-- Use the converted Base64 string here
+          photo: photoDataUri,
           department: participant.department,
           matricNo: participant.matricNo,
           gender: participant.gender,
@@ -244,6 +256,7 @@ exports.verifyQRCode = async (req, res, next) => {
     next(error);
   }
 };
+
 /**
  * @desc    Mark attendance after verification
  * @route   POST /api/attendance/mark-present
@@ -263,13 +276,22 @@ exports.markPresent = async (req, res, next) => {
       });
     }
 
-    // Find participant
-    const participant = await Participant.findById(participantId).populate('eventId', 'name date location startDate endDate status isActive isDeleted createdBy');
+    // Find participant and populate their event
+    const participant = await Participant.findById(participantId)
+      .populate('eventId', 'name date location startDate endDate status isActive isDeleted createdBy');
 
     if (!participant) {
       return res.status(404).json({
         success: false,
         message: 'Participant not found',
+      });
+    }
+
+    // ===== CRITICAL: Check if participant is active =====
+    if (!participant.isActive) {
+      return res.status(400).json({
+        success: false,
+        message: 'Participant registration is inactive',
       });
     }
 
@@ -283,9 +305,8 @@ exports.markPresent = async (req, res, next) => {
       });
     }
 
-    // CHECK SCANNER PERMISSIONS
+    // ===== CRITICAL: Check scanner permissions =====
     let hasPermission = false;
-
     if (scannerRole === 'superadmin') {
       hasPermission = true;
     } else if (event.createdBy.toString() === scannerId) {
@@ -336,6 +357,11 @@ exports.markPresent = async (req, res, next) => {
       attendanceDate: today,
     });
 
+    // Convert photo buffer to Base64 data URI
+    const photoDataUri = (participant.photo && participant.photo.data)
+      ? `data:${participant.photo.contentType};base64,${participant.photo.data.toString('base64')}`
+      : null;
+
     res.status(201).json({
       success: true,
       message: 'Attendance marked successfully',
@@ -345,7 +371,7 @@ exports.markPresent = async (req, res, next) => {
           id: participant._id,
           name: participant.name,
           email: participant.email,
-          photo: participant.photo,
+          photo: photoDataUri,
           department: participant.department,
           matricNo: participant.matricNo,
           gender: participant.gender,
@@ -364,18 +390,16 @@ exports.markPresent = async (req, res, next) => {
   }
 };
 
-
 /**
- * @desc    Get all attendance records for an event
+ * @desc    Get all attendance records for an event (ALL DAYS, NOT JUST TODAY)
  * @route   GET /api/attendance/event/:eventId
  * @access  Private (Admin/Superadmin)
  */
 exports.getEventAttendance = async (req, res, next) => {
   try {
     const { eventId } = req.params;
-    const { page = 1, limit = 20, status, sortBy = '-scannedAt' } = req.query;
+    const { page = 1, limit = 20, status, sortBy = '-scannedAt', date } = req.query;
 
-    // Check if event exists
     const event = await Event.findById(eventId);
     if (!event) {
       return res.status(404).json({
@@ -389,12 +413,18 @@ exports.getEventAttendance = async (req, res, next) => {
     if (status) {
       query.status = status;
     }
+    
+    // FIXED: Allow filtering by specific date if provided, otherwise get ALL records
+    if (date) {
+      const targetDate = new Date(date);
+      targetDate.setHours(0, 0, 0, 0);
+      query.attendanceDate = targetDate;
+    }
 
-    // Pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     const attendance = await Attendance.find(query)
-      .populate('participantId', 'name email photo department matricNo gender track')
+      .populate('participantId', 'name email photo department matricNo gender track phoneNumber')
       .populate('scannedBy', 'name email')
       .sort(sortBy)
       .limit(parseInt(limit))
@@ -425,7 +455,7 @@ exports.getEventAttendance = async (req, res, next) => {
 exports.getAttendance = async (req, res, next) => {
   try {
     const attendance = await Attendance.findById(req.params.id)
-      .populate('participantId', 'name email photo department matricNo gender track')
+      .populate('participantId', 'name email photo department matricNo gender track phoneNumber')
       .populate('eventId', 'name date location')
       .populate('scannedBy', 'name email');
 
@@ -472,7 +502,7 @@ exports.updateAttendance = async (req, res, next) => {
         runValidators: true,
       }
     )
-      .populate('participantId', 'name email photo department matricNo gender track')
+      .populate('participantId', 'name email photo department matricNo gender track phoneNumber')
       .populate('eventId', 'name date location')
       .populate('scannedBy', 'name email');
 
@@ -487,6 +517,7 @@ exports.updateAttendance = async (req, res, next) => {
     next(error);
   }
 };
+
 /**
  * @desc    Delete attendance record
  * @route   DELETE /api/attendance/:id
@@ -496,8 +527,6 @@ exports.deleteAttendance = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    // ensure valid id (validateObjectId middleware already runs for routes that use it,
-    // but we defensively check here)
     if (!id) {
       return res.status(400).json({
         success: false,
@@ -513,7 +542,6 @@ exports.deleteAttendance = async (req, res, next) => {
       });
     }
 
-    // Use findByIdAndDelete so we return the removed doc if needed
     await Attendance.findByIdAndDelete(id);
 
     res.status(200).json({
@@ -544,7 +572,6 @@ exports.getAttendanceReport = async (req, res, next) => {
       });
     }
 
-    // Ensure event exists
     const event = await Event.findById(eventId);
     if (!event) {
       return res.status(404).json({
@@ -553,11 +580,9 @@ exports.getAttendanceReport = async (req, res, next) => {
       });
     }
 
-    // Get all registered participants for this event
     const allParticipants = await Participant.find({ eventId, isActive: true });
     const totalRegistered = allParticipants.length;
 
-    // Aggregation for totals per status
     const totalsAgg = await Attendance.aggregate([
       { $match: { eventId: event._id } },
       {
@@ -568,7 +593,6 @@ exports.getAttendanceReport = async (req, res, next) => {
       },
     ]);
 
-    // Convert totalsAgg into an object with defaults
     const totals = {
       totalRegistered,
       present: 0,
@@ -580,12 +604,10 @@ exports.getAttendanceReport = async (req, res, next) => {
       totals[t._id] = t.count;
     });
 
-    // Calculate actual absent count (registered but not scanned)
     const totalScanned = totals.present + totals.late + totals.excused;
     totals.absent = totalRegistered - totalScanned;
     totals.totalScanned = totalScanned;
 
-    // Get list of absentees (participants who didn't scan)
     const attendedParticipantIds = await Attendance.find({ eventId })
       .distinct('participantId');
     
@@ -599,9 +621,9 @@ exports.getAttendanceReport = async (req, res, next) => {
       matricNo: p.matricNo,
       track: p.track,
       gender: p.gender,
+      phoneNumber: p.phoneNumber,
     }));
 
-    // Percentages (avoid division by zero)
     const safeTotal = totalRegistered || 1;
     const percentages = {
       presentPct: parseFloat(((totals.present / safeTotal) * 100).toFixed(2)),
@@ -611,13 +633,12 @@ exports.getAttendanceReport = async (req, res, next) => {
       attendanceRate: parseFloat(((totalScanned / safeTotal) * 100).toFixed(2)),
     };
 
-    // Breakdown by date
     const byDate = await Attendance.aggregate([
       { $match: { eventId: event._id } },
       {
         $group: {
           _id: {
-            $dateToString: { format: '%Y-%m-%d', date: '$scannedAt' },
+            $dateToString: { format: '%Y-%m-%d', date: '$attendanceDate' },
           },
           total: { $sum: 1 },
           present: {
@@ -644,7 +665,6 @@ exports.getAttendanceReport = async (req, res, next) => {
       },
     ]);
 
-    // Top participants by attendance count
     const topParticipants = await Attendance.aggregate([
       { $match: { eventId: event._id } },
       {
@@ -692,7 +712,7 @@ exports.getAttendanceReport = async (req, res, next) => {
 };
 
 /**
- * @desc    Get downloadable attendance report (FINAL VERSION)
+ * @desc    Get downloadable attendance report (FIXED WITH PHONE NUMBERS & CONDITIONAL FIELDS)
  * @route   GET /api/attendance/event/:eventId/download-report
  * @access  Private (Admin/Superadmin)
  */
@@ -708,9 +728,9 @@ exports.getDownloadableReport = async (req, res, next) => {
       });
     }
 
-    // Get all participants
+    // FIXED: Include phoneNumber in selection
     const allParticipants = await Participant.find({ eventId, isActive: true })
-      .select('name email track matricNo registeredAt')
+      .select('name email track matricNo registeredAt phoneNumber')
       .lean();
 
     if (allParticipants.length === 0) {
@@ -723,24 +743,23 @@ exports.getDownloadableReport = async (req, res, next) => {
             track: event.selectedTrack || null,
             startDate: event.startDate,
             endDate: event.endDate,
+            eventType: event.eventType || 'general', // For conditional CSV fields
           },
           attendanceRecords: [],
         },
       });
     }
 
-    // Find the FIRST registration date (event effectively started)
     const firstRegistrationDate = new Date(
       Math.min(...allParticipants.map(p => new Date(p.registeredAt)))
     );
     firstRegistrationDate.setHours(0, 0, 0, 0);
 
-    // Get all attendance records
+    // FIXED: Include attendanceDate in selection
     const allAttendance = await Attendance.find({ eventId })
       .select('participantId attendanceDate status scannedAt')
       .lean();
 
-    // Get unique attendance dates
     const attendanceDates = [...new Set(
       allAttendance.map(a => {
         const d = new Date(a.attendanceDate);
@@ -749,12 +768,14 @@ exports.getDownloadableReport = async (req, res, next) => {
       })
     )].sort((a, b) => a - b);
 
-    // If no attendance records yet, all are absent
     if (attendanceDates.length === 0) {
+      // FIXED: Include phoneNumber even when no attendance
       const records = allParticipants.map(p => ({
         eventName: event.name,
+        eventType: event.eventType || 'general',
         track: event.selectedTrack || 'N/A',
         participantName: p.name,
+        phoneNumber: p.phoneNumber || 'N/A',
         matricNo: p.matricNo || 'N/A',
         status: 'Absent',
         date: firstRegistrationDate.toISOString().split('T')[0],
@@ -768,6 +789,7 @@ exports.getDownloadableReport = async (req, res, next) => {
             name: event.name,
             track: event.selectedTrack || null,
             eventStartDate: firstRegistrationDate,
+            eventType: event.eventType || 'general',
           },
           summary: {
             totalParticipants: allParticipants.length,
@@ -779,21 +801,19 @@ exports.getDownloadableReport = async (req, res, next) => {
       });
     }
 
-    // Build comprehensive attendance records
+    // FIXED: Include phoneNumber in all records
     const attendanceRecords = [];
 
     for (const dateTimestamp of attendanceDates) {
       const date = new Date(dateTimestamp);
       const dateString = date.toISOString().split('T')[0];
 
-      // Get participants who were registered by this date
       const registeredByThisDate = allParticipants.filter(p => {
         const regDate = new Date(p.registeredAt);
         regDate.setHours(0, 0, 0, 0);
         return regDate <= date;
       });
 
-      // Get attendance for this date
       const dateAttendance = allAttendance.filter(a => {
         const attDate = new Date(a.attendanceDate);
         attDate.setHours(0, 0, 0, 0);
@@ -802,7 +822,6 @@ exports.getDownloadableReport = async (req, res, next) => {
 
       const attendedIds = dateAttendance.map(a => a.participantId.toString());
 
-      // Create records for each registered participant
       for (const participant of registeredByThisDate) {
         const didAttend = attendedIds.includes(participant._id.toString());
         const attendanceRecord = dateAttendance.find(
@@ -811,8 +830,10 @@ exports.getDownloadableReport = async (req, res, next) => {
 
         attendanceRecords.push({
           eventName: event.name,
+          eventType: event.eventType || 'general',
           track: event.selectedTrack || 'N/A',
           participantName: participant.name,
+          phoneNumber: participant.phoneNumber || 'N/A', // FIXED: Always include
           matricNo: participant.matricNo || 'N/A',
           status: didAttend ? 'Present' : 'Absent',
           date: dateString,
@@ -828,7 +849,6 @@ exports.getDownloadableReport = async (req, res, next) => {
       }
     }
 
-    // Calculate summary
     const totalPresent = attendanceRecords.filter(r => r.status === 'Present').length;
     const totalAbsent = attendanceRecords.filter(r => r.status === 'Absent').length;
 
@@ -840,6 +860,7 @@ exports.getDownloadableReport = async (req, res, next) => {
           track: event.selectedTrack || null,
           eventStartDate: firstRegistrationDate,
           totalDays: attendanceDates.length,
+          eventType: event.eventType || 'general', // FIXED: For conditional CSV export
         },
         summary: {
           totalParticipants: allParticipants.length,
@@ -854,7 +875,6 @@ exports.getDownloadableReport = async (req, res, next) => {
     next(error);
   }
 };
-
 
 /**
  * @desc    Get daily attendance breakdown for multi-day events
@@ -873,10 +893,10 @@ exports.getDailyAttendance = async (req, res, next) => {
       });
     }
 
-    // Get all participants
-    const allParticipants = await Participant.find({ eventId, isActive: true });
+    // FIXED: Include phoneNumber
+    const allParticipants = await Participant.find({ eventId, isActive: true })
+      .select('name email track matricNo phoneNumber');
 
-    // Get attendance grouped by date
     const dailyAttendance = await Attendance.aggregate([
       { $match: { eventId: event._id } },
       {
@@ -907,7 +927,6 @@ exports.getDailyAttendance = async (req, res, next) => {
       { $sort: { _id: 1 } },
     ]);
 
-    // Calculate absentees per day
     const dailyBreakdown = dailyAttendance.map(day => {
       const attendedIds = day.participants.map(p => p.participantId.toString());
       const absentees = allParticipants.filter(
@@ -917,6 +936,7 @@ exports.getDailyAttendance = async (req, res, next) => {
         name: p.name,
         email: p.email,
         track: p.track,
+        phoneNumber: p.phoneNumber,
       }));
 
       return {
@@ -951,11 +971,6 @@ exports.getDailyAttendance = async (req, res, next) => {
  * @desc    Get all attendance records for a specific participant
  * @route   GET /api/attendance/participant/:participantId
  * @access  Private (Admin/Superadmin)
- *
- * Query params:
- *  - page (default 1)
- *  - limit (default 20)
- *  - sortBy (default -scannedAt)
  */
 exports.getParticipantAttendance = async (req, res, next) => {
   try {
@@ -969,7 +984,6 @@ exports.getParticipantAttendance = async (req, res, next) => {
       });
     }
 
-    // Ensure participant exists
     const participant = await Participant.findById(participantId);
     if (!participant) {
       return res.status(404).json({
@@ -1011,7 +1025,7 @@ exports.getParticipantAttendance = async (req, res, next) => {
 };
 
 /**
- * @desc    Mark all participants as present for an event
+ * @desc    Mark all participants as present for an event (WITH REVOCATION TRACKING)
  * @route   POST /api/attendance/mark-all-present/:eventId
  * @access  Private (Superadmin only)
  */
@@ -1019,7 +1033,6 @@ exports.markAllPresent = async (req, res, next) => {
   try {
     const { eventId } = req.params;
 
-    // Verify event exists
     const event = await Event.findById(eventId);
     if (!event) {
       return res.status(404).json({
@@ -1028,7 +1041,6 @@ exports.markAllPresent = async (req, res, next) => {
       });
     }
 
-    // Get all participants for this event
     const participants = await Participant.find({ eventId, isActive: true });
 
     if (participants.length === 0) {
@@ -1038,41 +1050,49 @@ exports.markAllPresent = async (req, res, next) => {
       });
     }
 
-    // Check which participants already have attendance
-    const existingAttendanceIds = await Attendance.find({ eventId })
-      .distinct('participantId');
+    // FIXED: Check for TODAY's attendance only
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
 
-    // Filter out participants who already have attendance
+    const existingAttendance = await Attendance.find({ 
+      eventId,
+      attendanceDate: today 
+    });
+    const existingAttendanceIds = existingAttendance.map(a => a.participantId.toString());
+
     const participantsToMark = participants.filter(
-      p => !existingAttendanceIds.some(id => id.toString() === p._id.toString())
+      p => !existingAttendanceIds.includes(p._id.toString())
     );
 
     if (participantsToMark.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'All participants already marked present',
+        message: 'All participants already marked present for today',
       });
     }
 
-    // Create attendance records for all participants without attendance
+    // Create attendance records with special marker for bulk action
     const attendanceRecords = participantsToMark.map(participant => ({
       participantId: participant._id,
       eventId,
       scannedBy: req.user.id,
       status: 'present',
-      notes: 'Marked present by admin (bulk)',
+      notes: 'BULK_MARKED_PRESENT', // Special marker for revocation
+      attendanceDate: today,
       scannedAt: new Date(),
     }));
 
-    await Attendance.insertMany(attendanceRecords);
+    const insertedRecords = await Attendance.insertMany(attendanceRecords);
 
     res.status(201).json({
       success: true,
-      message: `Successfully marked ${participantsToMark.length} participants as present`,
+      message: `Successfully marked ${participantsToMark.length} participants as present for today`,
       data: {
         totalMarked: participantsToMark.length,
         totalParticipants: participants.length,
         alreadyMarked: existingAttendanceIds.length,
+        bulkActionId: insertedRecords[0]._id, // For potential revocation reference
+        date: today.toISOString().split('T')[0],
       },
     });
   } catch (error) {
@@ -1081,7 +1101,63 @@ exports.markAllPresent = async (req, res, next) => {
 };
 
 /**
- * @desc    Download event participants as JSON (can be converted to CSV on frontend)
+ * @desc    Revoke "Mark All Present" action (NEW ENDPOINT)
+ * @route   POST /api/attendance/revoke-mark-all/:eventId
+ * @access  Private (Superadmin only)
+ */
+exports.revokeMarkAllPresent = async (req, res, next) => {
+  try {
+    const { eventId } = req.params;
+    const { date } = req.body; // Optional: specific date to revoke, defaults to today
+
+    const event = await Event.findById(eventId);
+    if (!event) {
+      return res.status(404).json({
+        success: false,
+        message: 'Event not found',
+      });
+    }
+
+    // Determine which date to revoke
+    const targetDate = date ? new Date(date) : new Date();
+    targetDate.setHours(0, 0, 0, 0);
+
+    // Find all bulk-marked attendance for this date
+    const bulkMarkedRecords = await Attendance.find({
+      eventId,
+      attendanceDate: targetDate,
+      notes: 'BULK_MARKED_PRESENT',
+    });
+
+    if (bulkMarkedRecords.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No bulk-marked attendance found for this date',
+      });
+    }
+
+    // Delete only the bulk-marked records (preserves individually scanned ones)
+    const deletedCount = await Attendance.deleteMany({
+      eventId,
+      attendanceDate: targetDate,
+      notes: 'BULK_MARKED_PRESENT',
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Successfully revoked bulk attendance marking for ${deletedCount.deletedCount} participants`,
+      data: {
+        revokedCount: deletedCount.deletedCount,
+        date: targetDate.toISOString().split('T')[0],
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Download event participants as JSON (FIXED WITH PHONE NUMBERS)
  * @route   GET /api/attendance/download/:eventId
  * @access  Private (Admin/Superadmin)
  */
@@ -1089,7 +1165,6 @@ exports.downloadEventData = async (req, res, next) => {
   try {
     const { eventId } = req.params;
 
-    // Get event details
     const event = await Event.findById(eventId).populate('createdBy', 'name email');
     if (!event) {
       return res.status(404).json({
@@ -1098,15 +1173,13 @@ exports.downloadEventData = async (req, res, next) => {
       });
     }
 
-    // Get all participants with attendance status
+    // FIXED: Include phoneNumber in populate
     const participants = await Participant.find({ eventId })
       .populate('eventId', 'name date location')
       .lean();
 
-    // Get all attendance records
     const attendanceRecords = await Attendance.find({ eventId }).lean();
 
-    // Create attendance map for quick lookup
     const attendanceMap = {};
     attendanceRecords.forEach(record => {
       attendanceMap[record.participantId.toString()] = {
@@ -1116,18 +1189,18 @@ exports.downloadEventData = async (req, res, next) => {
       };
     });
 
-    // Combine participant and attendance data
+    // FIXED: Include phoneNumber in download data
     const downloadData = participants.map(participant => {
       const attendance = attendanceMap[participant._id.toString()];
       return {
         participantId: participant._id,
         name: participant.name,
         email: participant.email,
+        phoneNumber: participant.phoneNumber || 'N/A', // FIXED
         department: participant.department || 'N/A',
         matricNo: participant.matricNo || 'N/A',
         gender: participant.gender || 'N/A',
         track: participant.track || 'N/A',
-        phoneNumber: participant.phoneNumber || 'N/A',
         registeredAt: participant.registeredAt,
         attendanceStatus: attendance ? attendance.status : 'absent',
         scannedAt: attendance ? attendance.scannedAt : null,
@@ -1144,6 +1217,7 @@ exports.downloadEventData = async (req, res, next) => {
           date: event.date,
           location: event.location,
           createdBy: event.createdBy.name,
+          eventType: event.eventType || 'general', // For conditional CSV fields
         },
         participants: downloadData,
         summary: {
@@ -1160,4 +1234,3 @@ exports.downloadEventData = async (req, res, next) => {
     next(error);
   }
 };
-

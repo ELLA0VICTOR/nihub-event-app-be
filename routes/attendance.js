@@ -5,8 +5,8 @@ const { getDailyAttendance } = require('../controllers/attendanceController');
 const { getDownloadableReport } = require('../controllers/attendanceController');
 const {
   scanQRCode,
-  verifyQRCode, // NEW
-  markPresent, // NEW
+  verifyQRCode,
+  markPresent,
   getEventAttendance,
   getAttendance,
   updateAttendance,
@@ -14,6 +14,7 @@ const {
   getAttendanceReport,
   getParticipantAttendance,
   markAllPresent,
+  revokeMarkAllPresent, // NEW
   downloadEventData,
 } = require('../controllers/attendanceController');
 const { protect, authorize } = require('../middleware/authMiddleware');
@@ -80,9 +81,17 @@ const updateAttendanceValidation = [
     .withMessage('Notes cannot exceed 500 characters'),
 ];
 
+// NEW: Validation for revoke action
+const revokeValidation = [
+  body('date')
+    .optional()
+    .isISO8601()
+    .withMessage('Invalid date format'),
+];
+
 // Routes
 
-// NEW: Verify QR code and get participant details (no attendance marking)
+// Verify QR code and get participant details (no attendance marking)
 router.post(
   '/verify-qr',
   protect,
@@ -92,7 +101,7 @@ router.post(
   verifyQRCode
 );
 
-// NEW: Mark attendance after manual verification
+// Mark attendance after manual verification
 router.post(
   '/mark-present',
   protect,
@@ -102,7 +111,7 @@ router.post(
   markPresent
 );
 
-// OLD: Direct scan (kept for backward compatibility, but consider deprecating)
+// Direct scan (kept for backward compatibility)
 router.post(
   '/scan',
   protect,
@@ -155,6 +164,17 @@ router.post(
   authorize('admin', 'superadmin'),
   validateObjectId('eventId'),
   markAllPresent
+);
+
+// NEW: Revoke "Mark All Present" action (Superadmin only)
+router.post(
+  '/revoke-mark-all/:eventId',
+  protect,
+  authorize('admin', 'superadmin'),
+  validateObjectId('eventId'),
+  revokeValidation,
+  validate,
+  revokeMarkAllPresent
 );
 
 router.get(
