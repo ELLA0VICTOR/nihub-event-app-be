@@ -389,7 +389,7 @@ exports.markPresent = async (req, res, next) => {
     next(error);
   }
 };
-
+///////////////////////////////////////////////////////////////////////////////////////////
 /**
  * @desc    Get all attendance records for an event (ALL DAYS, NOT JUST TODAY)
  * @route   GET /api/attendance/event/:eventId
@@ -884,72 +884,132 @@ exports.getDownloadableReport = async (req, res, next) => {
 exports.getDailyAttendance = async (req, res, next) => {
   try {
     const { eventId } = req.params;
+    const { date } = req.query; // Get the optional date from query
 
-    const event = await Event.findById(eventId);
+    // --- Step 1: Get Event and Check Dates ---
+    const event = await Event.findById(eventId).select('name startDate endDate');
     if (!event) {
-      return res.status(404).json({
+      return res.status(404).json({ success: false, message: 'Event not found' });
+    }
+    if (!event.startDate || !event.endDate) {
+      return res.status(400).json({
         success: false,
-        message: 'Event not found',
+        message: 'This is not a multi-day event. Use a different report.',
       });
     }
 
-    // FIXED: Include phoneNumber
+    // --- Step 2: Get ALL Participants for the event ---
     const allParticipants = await Participant.find({ eventId, isActive: true })
-      .select('name email track matricNo phoneNumber');
+      .select('name email track phoneNumber registeredAt')
+      .lean(); 
 
-    const dailyAttendance = await Attendance.aggregate([
-      { $match: { eventId: event._id } },
-      {
-        $group: {
-          _id: {
-            date: { $dateToString: { format: '%Y-%m-%d', date: '$attendanceDate' } },
-            participantId: '$participantId',
-          },
-          status: { $first: '$status' },
-          scannedAt: { $first: '$scannedAt' },
-        },
-      },
-      {
-        $group: {
-          _id: '$_id.date',
-          participants: {
-            $push: {
-              participantId: '$_id.participantId',
-              status: '$status',
-              scannedAt: '$scannedAt',
-            },
-          },
-          presentCount: {
-            $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] },
-          },
-        },
-      },
-      { $sort: { _id: 1 } },
-    ]);
+    // --- Step 3: Get ALL Attendance Records for the event ---
+    const allAttendanceRecords = await Attendance.find({ eventId })
+      .select('participantId attendanceDate scannedAt status')
+      .lean();
 
-    const dailyBreakdown = dailyAttendance.map(day => {
-      const attendedIds = day.participants.map(p => p.participantId.toString());
-      const absentees = allParticipants.filter(
-        p => !attendedIds.includes(p._id.toString())
-      ).map(p => ({
-        participantId: p._id,
-        name: p.name,
-        email: p.email,
-        track: p.track,
-        phoneNumber: p.phoneNumber,
-      }));
+    // Create a fast lookup map for attendance
+    const attendanceMap = new Map();
+    for (const record of allAttendanceRecords) {
+      // Use toISOString to ensure we get the UTC date
+      const dateStr = record.attendanceDate.toISOString().split('T')[0];
+      const key = `${record.participantId}_${dateStr}`;
+      attendanceMap.set(key, {
+        scannedAt: record.scannedAt,
+        status: record.status,
+      });
+    }
 
-      return {
-        date: day._id,
-        totalRegistered: allParticipants.length,
-        presentCount: day.presentCount,
+    // --- Step 4: Set the date range for the report (in UTC) ---
+    // We get the UTC dates directly from the database
+    let reportStartDate = new Date(event.startDate);
+    let reportEndDate = new Date(event.endDate);
+
+    if (date) {
+      // If a single date is requested, parse it as UTC
+      // 'T00:00:00Z' is crucial to prevent timezone shift
+      const requestedDate = new Date(date + 'T00:00:00Z');
+
+      // Validate: Check if the requested date is within the event's range
+      if (requestedDate < reportStartDate || requestedDate > reportEndDate) {
+        return res.status(400).json({
+          success: false,
+          message: 'Requested date is not within the event duration.',
+        });
+      }
+
+      // Set the loop to run for only this one day
+      reportStartDate = requestedDate;
+      reportEndDate = requestedDate;
+    }
+
+    // --- Step 5: Loop Through Each Day and Build the Report (in UTC) ---
+    const dailyBreakdown = [];
+    const currentDate = new Date(reportStartDate);
+
+    while (currentDate <= reportEndDate) { 
+      // Get the UTC date string
+      const dateStr = currentDate.toISOString().split('T')[0];
+
+      const attendees = [];
+      const absentees = [];
+      let totalRegisteredForThisDay = 0;
+
+      for (const participant of allParticipants) {
+        
+        // Get the participant's registration date (already in UTC)
+        const registeredDate = new Date(participant.registeredAt);
+
+        // We only compare the date part by setting time to 0 (UTC)
+        registeredDate.setUTCHours(0, 0, 0, 0);
+
+        if (registeredDate > currentDate) {
+          continue; // They are not part of this day's report
+        }
+
+        totalRegisteredForThisDay++;
+        
+        const lookupKey = `${participant._id}_${dateStr}`;
+        const attendanceRecord = attendanceMap.get(lookupKey);
+
+        if (attendanceRecord) {
+          // They were PRESENT
+          attendees.push({
+            participantId: participant._id,
+            name: participant.name,
+            email: participant.email,
+            status: attendanceRecord.status,
+            scannedAt: attendanceRecord.scannedAt,
+          });
+        } else {
+          // They were ABSENT
+          absentees.push({
+            participantId: participant._id,
+            name: participant.name,
+            email: participant.email,
+            track: participant.track,
+            phoneNumber: participant.phoneNumber,
+          });
+        }
+      }
+
+      dailyBreakdown.push({
+        date: dateStr, // This will now be the correct UTC date
+        totalRegistered: totalRegisteredForThisDay,
+        presentCount: attendees.length,
         absentCount: absentees.length,
-        attendanceRate: ((day.presentCount / allParticipants.length) * 100).toFixed(2),
-        attendees: day.participants,
-        absentees,
-      };
-    });
+        attendanceRate: (totalRegisteredForThisDay > 0) 
+          ? ((attendees.length / totalRegisteredForThisDay) * 100).toFixed(2) 
+          : "0.00",
+        attendees: attendees,
+        absentees: absentees,
+      });
 
+      // Go to the next day IN UTC
+      currentDate.setUTCDate(currentDate.getUTCDate() + 1);
+    }
+
+    // --- Step 6: Send the Final Report ---
     res.status(200).json({
       success: true,
       data: {
@@ -962,6 +1022,7 @@ exports.getDailyAttendance = async (req, res, next) => {
         dailyBreakdown,
       },
     });
+
   } catch (error) {
     next(error);
   }
