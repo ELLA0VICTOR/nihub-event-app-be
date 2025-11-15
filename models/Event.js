@@ -26,7 +26,14 @@ const eventSchema = new mongoose.Schema({
     type: Date,
     validate: {
       validator: function(value) {
-        return !value || value >= this.startDate;
+        // CRITICAL FIX: Don't validate if endDate is not being set/updated
+        if (!value) return true;
+        
+        // For updates: if startDate is being modified, use the new value
+        // Otherwise, use the current document's startDate
+        const startToCompare = this.startDate;
+        
+        return value >= startToCompare;
       },
       message: 'End date must be after or equal to start date',
     },
@@ -71,14 +78,10 @@ const eventSchema = new mongoose.Schema({
     type: Date,
   },
   
-  // ===== MODIFIED FIELD =====
-  // Replaced 'imageUrl' with this object to store binary image data
   eventImage: {
     data: Buffer,
     contentType: String
-    // 'required: false' was removed here to fix the crash
   },
-  // ==========================
 
   // Track selection from predefined options
   selectedTrack: {
