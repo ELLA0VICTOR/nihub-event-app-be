@@ -227,7 +227,7 @@ exports.sendQRCodeEmail = async ({ to, name, eventName, qrCode, eventDate, event
         <body>
           <div class="container">
             <div class="header">
-              <h1>🎉 Registration Successful!</h1>
+              <h1> Registration Successful!</h1>
             </div>
             <div class="content">
               <p>Dear <strong>${name}</strong>,</p>

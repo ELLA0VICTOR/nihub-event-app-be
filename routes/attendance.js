@@ -4,7 +4,6 @@ const { checkEventAccess } = require('../middleware/checkEventCreator');
 const { getDailyAttendance } = require('../controllers/attendanceController');
 const { getDownloadableReport } = require('../controllers/attendanceController');
 const {
-  scanQRCode,
   verifyQRCode,
   markPresent,
   getEventAttendance,
@@ -13,8 +12,6 @@ const {
   deleteAttendance,
   getAttendanceReport,
   getParticipantAttendance,
-  markAllPresent,
-  revokeMarkAllPresent, // NEW
   downloadEventData,
 } = require('../controllers/attendanceController');
 const { protect, authorize } = require('../middleware/authMiddleware');
@@ -81,13 +78,6 @@ const updateAttendanceValidation = [
     .withMessage('Notes cannot exceed 500 characters'),
 ];
 
-// NEW: Validation for revoke action
-const revokeValidation = [
-  body('date')
-    .optional()
-    .isISO8601()
-    .withMessage('Invalid date format'),
-];
 
 // Routes
 
@@ -149,25 +139,7 @@ router.route('/:id')
   )
   .delete(protect, authorize('admin', 'superadmin'), validateObjectId(), deleteAttendance);
 
-// Mark all participants as present (Superadmin only)
-router.post(
-  '/mark-all-present/:eventId',
-  protect,
-  authorize('admin', 'superadmin'),
-  validateObjectId('eventId'),
-  markAllPresent
-);
 
-// NEW: Revoke "Mark All Present" action (Superadmin only)
-router.post(
-  '/revoke-mark-all/:eventId',
-  protect,
-  authorize('admin', 'superadmin'),
-  validateObjectId('eventId'),
-  revokeValidation,
-  validate,
-  revokeMarkAllPresent
-);
 
 router.get(
   '/event/:eventId/download-report',

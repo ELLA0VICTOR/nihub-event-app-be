@@ -74,26 +74,6 @@ app.use(helmet({
   },
 }));
 
-// ===== STATIC FILES - Must be early in middleware chain =====
-// This is no longer needed for new uploads, as they are stored in the DB.
-// You can keep it if you have old images in your DB still pointing here.
-/*
-app.use('/uploads', (req, res, next) => {
-  const origin = req.headers.origin;
-  
-  // Set CORS headers explicitly for static files
-  if (origin && allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-  } else if (allowedOrigins.length > 0) {
-    res.header('Access-Control-Allow-Origin', allowedOrigins[0]);
-  }
-  
-  res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.header('Cross-Origin-Resource-Policy', 'cross-origin');
-  next();
-}, express.static(path.join(__dirname, 'uploads')));
-*/
 
 // Rate limiting (AFTER static files to not rate-limit images)
 const limiter = rateLimit({
